@@ -8,15 +8,19 @@ import boto3
 from boto3.dynamodb.types import TypeDeserializer
 
 from log_util import log_structured
+from metadata_copy import copy_metadata_from_master, fan_out_metadata_to_per_file_records
 from publish import publish_enriched_event, validate_metadata
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "sftp-connector-helper-bus")
+TABLE_NAME = os.environ.get("TABLE_NAME", "sftp-connector-helper")
 
 cloudwatch = boto3.client("cloudwatch")
 events = boto3.client("events")
+dynamodb = boto3.resource("dynamodb")
+table = dynamodb.Table(TABLE_NAME)
 
 deserializer = TypeDeserializer()
 
@@ -69,6 +73,28 @@ def _emit_invalid_metadata_metric(connector_id: str) -> None:
         )
 
 
+def _metadata_copy_dispatch(new_image: dict, job_id: str) -> bool:
+    """Dispatch metadata-copy logic. Returns True if copy path was taken."""
+    has_metadata = "metadata" in new_image
+    has_event_result = "eventResult" in new_image
+    has_transfer_id = "transferId" in new_image
+
+    # Per-file detection: has eventResult + transferId, no metadata
+    if has_event_result and has_transfer_id and not has_metadata:
+        transfer_id = new_image["transferId"]
+        log_structured("INFO", "Per-file record detected, copying metadata from master", job_id=job_id, transfer_id=transfer_id)
+        copy_metadata_from_master(table, transfer_id, job_id)
+        return True
+
+    # Master detection: has metadata, no eventResult, no transferId
+    if has_metadata and not has_event_result and not has_transfer_id:
+        log_structured("INFO", "Master record detected, fanning out metadata", job_id=job_id)
+        fan_out_metadata_to_per_file_records(table, job_id, new_image["metadata"])
+        return True
+
+    return False
+
+
 def _process_record(stream_record: dict) -> None:
     """Process a single DynamoDB Stream record."""
     event_name = stream_record.get("eventName")
@@ -106,6 +132,16 @@ def _process_record(stream_record: dict) -> None:
                     job_id=job_id,
                 )
                 return
+            # Metadata-copy loop prevention: OldImage already has metadata → skip copy rules
+            if "metadata" not in old_image:
+                if _metadata_copy_dispatch(new_image, job_id):
+                    return
+        else:
+            if _metadata_copy_dispatch(new_image, job_id):
+                return
+    elif event_name == "INSERT":
+        if _metadata_copy_dispatch(new_image, job_id):
+            return
 
     # Completeness check
     if not _has_both_fields(new_image):

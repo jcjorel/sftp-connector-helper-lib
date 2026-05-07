@@ -182,3 +182,39 @@ class TestBatchItemFailures:
         result = handler.lambda_handler(event, None)
 
         assert result == {"batchItemFailures": [{"itemIdentifier": "msg-fail"}]}
+
+
+class TestMetadataCopyNoRegression:
+    """Verify metadata-copy integration does not break existing publish/loop paths."""
+
+    def test_complete_record_without_transfer_id_still_publishes(self, mock_events, mock_cloudwatch, mock_table):
+        """Record with both metadata+eventResult but no transferId → publishes (not copy path)."""
+        import handler
+
+        new_img = make_dynamo_image("job-reg1", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
+        old_img = make_dynamo_image("job-reg1", event_result=SAMPLE_EVENT_RESULT)
+        record = make_stream_record("MODIFY", "job-reg1", new_image=new_img, old_image=old_img)
+        event = make_sqs_event(record)
+
+        result = handler.lambda_handler(event, None)
+
+        assert result == {"batchItemFailures": []}
+        mock_events.put_events.assert_called_once()
+        mock_table.get_item.assert_not_called()
+        mock_table.query.assert_not_called()
+
+    def test_loop_prevention_still_works_with_metadata_copy_present(self, mock_events, mock_cloudwatch, mock_table):
+        """MODIFY with OldImage having both fields → still skips (loop prevention unchanged)."""
+        import handler
+
+        new_img = make_dynamo_image("job-reg2", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
+        old_img = make_dynamo_image("job-reg2", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
+        record = make_stream_record("MODIFY", "job-reg2", new_image=new_img, old_image=old_img)
+        event = make_sqs_event(record)
+
+        result = handler.lambda_handler(event, None)
+
+        assert result == {"batchItemFailures": []}
+        mock_events.put_events.assert_not_called()
+        mock_table.get_item.assert_not_called()
+        mock_table.query.assert_not_called()

@@ -29,6 +29,13 @@ def mock_cloudwatch():
         yield mock_client
 
 
+@pytest.fixture
+def mock_table():
+    """Mock DynamoDB Table resource."""
+    with patch("handler.table") as mock_tbl:
+        yield mock_tbl
+
+
 def make_sqs_event(*stream_records: dict) -> dict:
     """Build an SQS event wrapping DynamoDB Stream records."""
     return {
@@ -64,6 +71,7 @@ def make_dynamo_image(
     job_id: str,
     metadata: str | None = None,
     event_result: str | None = None,
+    transfer_id: str | None = None,
 ) -> dict:
     """Build a DynamoDB image with typed attributes."""
     image = {"jobId": {"S": job_id}, "ttl": {"N": "1715200000"}}
@@ -71,6 +79,8 @@ def make_dynamo_image(
         image["metadata"] = {"S": metadata}
     if event_result is not None:
         image["eventResult"] = {"S": event_result}
+    if transfer_id is not None:
+        image["transferId"] = {"S": transfer_id}
     return image
 
 
