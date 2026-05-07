@@ -1,5 +1,6 @@
 package io.github.jcjorel.sftpconnectorhelper;
 
+import io.github.jcjorel.sftpconnectorhelper.internal.MetadataValidator;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.transfer.TransferClient;
 
@@ -50,5 +51,13 @@ public final class SftpConnectorHelper implements AutoCloseable {
     public void close() {
         dynamoDbClient.close();
         transferClient.close();
+    }
+
+    /**
+     * Validates metadata before SDK calls.
+     * Package-private — called by wrapper methods in Stories 1.3/1.4.
+     */
+    void validateMetadata(String metadata) {
+        MetadataValidator.validate(metadata);
     }
 }

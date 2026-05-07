@@ -19,6 +19,7 @@
         <aws.sdk.version>2.31.1</aws.sdk.version>
         <junit.version>5.11.4</junit.version>
         <mockito.version>5.15.2</mockito.version>
+        <jackson.version>2.18.2</jackson.version>
     </properties>
 
     <dependencyManagement>
@@ -41,6 +42,11 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>transfer</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
         </dependency>
 
         <!-- Test dependencies -->
