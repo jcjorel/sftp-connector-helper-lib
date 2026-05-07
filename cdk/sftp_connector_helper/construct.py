@@ -1,11 +1,16 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import aws_cdk as cdk
 from aws_cdk import (
     aws_dynamodb as dynamodb,
     aws_events as events,
+    aws_events_targets as targets,
+    aws_lambda as _lambda,
+    aws_lambda_event_sources as lambda_event_sources,
     aws_sns as sns,
+    aws_sqs as sqs,
 )
 from constructs import Construct
 
@@ -71,6 +76,58 @@ class SftpConnectorHelper(Construct):
 
         # SNS Topic for orphan alerts
         self._orphan_topic = sns.Topic(self, "OrphanAlertTopic")
+
+        # Event Writer Pipeline
+        event_writer_dlq = sqs.Queue(self, "EventWriterDLQ")
+
+        event_writer_queue = sqs.Queue(
+            self,
+            "EventWriterQueue",
+            queue_name="sftp-connector-helper-event-writer",
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=3,
+                queue=event_writer_dlq,
+            ),
+        )
+
+        rule = events.Rule(
+            self,
+            "SftpConnectorEventRule",
+            event_pattern=events.EventPattern(
+                source=["aws.transfer"],
+            ),
+        )
+        # Add prefix matching on detail-type via raw pattern override
+        cfn_rule = rule.node.default_child
+        cfn_rule.add_property_override(
+            "EventPattern",
+            {
+                "source": ["aws.transfer"],
+                "detail-type": [{"prefix": "SFTP Connector"}],
+            },
+        )
+        rule.add_target(targets.SqsQueue(event_writer_queue))
+
+        event_writer_lambda = _lambda.Function(
+            self,
+            "EventWriterFunction",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="handler.lambda_handler",
+            code=_lambda.Code.from_asset(
+                str(Path(__file__).parent / "../../lambdas/event-writer/dist")
+            ),
+            environment={
+                "TABLE_NAME": self._table.table_name,
+            },
+            memory_size=props.event_writer_memory,
+            timeout=props.event_writer_timeout,
+        )
+
+        event_writer_lambda.add_event_source(
+            lambda_event_sources.SqsEventSource(event_writer_queue)
+        )
+
+        self._table.grant(event_writer_lambda, "dynamodb:UpdateItem")
 
     @property
     def table(self) -> dynamodb.ITable:

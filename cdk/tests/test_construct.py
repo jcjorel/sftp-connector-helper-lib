@@ -106,3 +106,92 @@ class TestEventBridge:
 class TestSNS:
     def test_default_creates_sns_topic(self, template_default):
         template_default.resource_count_is("AWS::SNS::Topic", 1)
+
+
+class TestEventWriterPipeline:
+    def test_event_writer_queue_has_fixed_name(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::SQS::Queue",
+            {"QueueName": "sftp-connector-helper-event-writer"},
+        )
+
+    def test_event_writer_queue_has_dlq(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::SQS::Queue",
+            {
+                "QueueName": "sftp-connector-helper-event-writer",
+                "RedrivePolicy": Match.object_like(
+                    {"maxReceiveCount": 3}
+                ),
+            },
+        )
+
+    def test_eventbridge_rule_pattern(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::Events::Rule",
+            {
+                "EventPattern": {
+                    "source": ["aws.transfer"],
+                    "detail-type": [{"prefix": "SFTP Connector"}],
+                },
+            },
+        )
+
+    def test_event_writer_lambda_environment(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::Lambda::Function",
+            {
+                "Environment": {
+                    "Variables": {
+                        "TABLE_NAME": Match.any_value(),
+                    },
+                },
+                "Handler": "handler.lambda_handler",
+                "Runtime": "python3.12",
+            },
+        )
+
+    def test_event_writer_lambda_iam_scoped_to_table(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::IAM::Policy",
+            {
+                "PolicyDocument": {
+                    "Statement": Match.array_with(
+                        [
+                            Match.object_like(
+                                {
+                                    "Action": "dynamodb:UpdateItem",
+                                    "Effect": "Allow",
+                                    "Resource": Match.any_value(),
+                                }
+                            ),
+                        ]
+                    ),
+                },
+            },
+        )
+        # Verify the resource is NOT "*" (must be scoped to table ARN)
+        template_default.has_resource_properties(
+            "AWS::IAM::Policy",
+            {
+                "PolicyDocument": {
+                    "Statement": Match.not_(
+                        Match.array_with(
+                            [
+                                Match.object_like(
+                                    {
+                                        "Action": "dynamodb:UpdateItem",
+                                        "Resource": "*",
+                                    }
+                                ),
+                            ]
+                        )
+                    ),
+                },
+            },
+        )
+
+    def test_event_source_mapping_connects_queue_to_lambda(self, template_default):
+        template_default.resource_count_is(
+            "AWS::Lambda::EventSourceMapping", 1
+        )

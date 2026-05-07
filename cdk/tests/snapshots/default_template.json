@@ -54,6 +54,232 @@
     },
     "HelperOrphanAlertTopic85AE8894": {
       "Type": "AWS::SNS::Topic"
+    },
+    "HelperEventWriterDLQ7EAE9D0B": {
+      "Type": "AWS::SQS::Queue",
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HelperEventWriterQueueDBA8FFE2": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": "sftp-connector-helper-event-writer",
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "HelperEventWriterDLQ7EAE9D0B",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": 3
+        }
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HelperEventWriterQueuePolicy6C07CB75": {
+      "Type": "AWS::SQS::QueuePolicy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:SendMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl"
+              ],
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "HelperSftpConnectorEventRule81000858",
+                      "Arn"
+                    ]
+                  }
+                }
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "events.amazonaws.com"
+              },
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HelperEventWriterQueueDBA8FFE2",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "Queues": [
+          {
+            "Ref": "HelperEventWriterQueueDBA8FFE2"
+          }
+        ]
+      }
+    },
+    "HelperSftpConnectorEventRule81000858": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "EventPattern": {
+          "source": [
+            "aws.transfer"
+          ],
+          "detail-type": [
+            {
+              "prefix": "SFTP Connector"
+            }
+          ]
+        },
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "HelperEventWriterQueueDBA8FFE2",
+                "Arn"
+              ]
+            },
+            "Id": "Target0"
+          }
+        ]
+      }
+    },
+    "HelperEventWriterFunctionServiceRole6A1CD748": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "HelperEventWriterFunctionServiceRoleDefaultPolicyC4E6B44A": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "sqs:ReceiveMessage",
+                "sqs:ChangeMessageVisibility",
+                "sqs:GetQueueUrl",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HelperEventWriterQueueDBA8FFE2",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": "dynamodb:UpdateItem",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HelperTable7DF2E3E7",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HelperTable7DF2E3E7",
+                          "Arn"
+                        ]
+                      },
+                      "/index/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "HelperEventWriterFunctionServiceRoleDefaultPolicyC4E6B44A",
+        "Roles": [
+          {
+            "Ref": "HelperEventWriterFunctionServiceRole6A1CD748"
+          }
+        ]
+      }
+    },
+    "HelperEventWriterFunction16141064": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
+          },
+          "S3Key": "8862c735665fb0d0fb4679684bf23fa554cfd00152fbffa8136f6944440de682.zip"
+        },
+        "Environment": {
+          "Variables": {
+            "TABLE_NAME": {
+              "Ref": "HelperTable7DF2E3E7"
+            }
+          }
+        },
+        "Handler": "handler.lambda_handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "HelperEventWriterFunctionServiceRole6A1CD748",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.12",
+        "Timeout": 30
+      },
+      "DependsOn": [
+        "HelperEventWriterFunctionServiceRoleDefaultPolicyC4E6B44A",
+        "HelperEventWriterFunctionServiceRole6A1CD748"
+      ]
+    },
+    "HelperEventWriterFunctionSqsEventSourceTestStackHelperEventWriterQueue67D227DECA651C61": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "Properties": {
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "HelperEventWriterQueueDBA8FFE2",
+            "Arn"
+          ]
+        },
+        "FunctionName": {
+          "Ref": "HelperEventWriterFunction16141064"
+        }
+      }
     }
   },
   "Parameters": {
