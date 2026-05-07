@@ -7,7 +7,7 @@ import time
 
 import boto3
 
-from field_mapping import get_job_id
+from field_mapping import UnknownOperationError, get_job_id
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -15,6 +15,7 @@ logger.setLevel(logging.INFO)
 TABLE_NAME = os.environ.get("TABLE_NAME", "sftp-connector-helper")
 
 dynamodb = boto3.client("dynamodb")
+cloudwatch = boto3.client("cloudwatch")
 
 
 def log_structured(level: str, message: str, **kwargs) -> None:
@@ -22,6 +23,26 @@ def log_structured(level: str, message: str, **kwargs) -> None:
     entry = {"level": level, "message": message}
     entry.update(kwargs)
     logger.log(getattr(logging, level), json.dumps(entry))
+
+
+def emit_unknown_operation_metric(connector_id: str) -> None:
+    """Emit UnknownOperationType metric with and without ConnectorId dimension."""
+    cloudwatch.put_metric_data(
+        Namespace="SftpConnectorHelper",
+        MetricData=[
+            {
+                "MetricName": "UnknownOperationType",
+                "Dimensions": [{"Name": "ConnectorId", "Value": connector_id}],
+                "Value": 1,
+                "Unit": "Count",
+            },
+            {
+                "MetricName": "UnknownOperationType",
+                "Value": 1,
+                "Unit": "Count",
+            },
+        ],
+    )
 
 
 def lambda_handler(event, context):
@@ -34,7 +55,25 @@ def lambda_handler(event, context):
         detail = eb_event["detail"]
         connector_id = detail.get("connector-id", "unknown")
 
-        job_id, operation, is_per_file = get_job_id(detail, detail_type)
+        try:
+            job_id, operation, is_per_file = get_job_id(detail, detail_type)
+        except UnknownOperationError:
+            log_structured(
+                "WARNING",
+                "Unknown operation type, discarding event",
+                job_id="unknown",
+                operation=detail_type,
+                connector_id=connector_id,
+            )
+            try:
+                emit_unknown_operation_metric(connector_id)
+            except Exception:
+                log_structured(
+                    "WARNING",
+                    "Failed to emit UnknownOperationType metric",
+                    connector_id=connector_id,
+                )
+            continue
 
         log_structured(
             "INFO",

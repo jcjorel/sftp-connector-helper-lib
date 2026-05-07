@@ -22,6 +22,14 @@ def mock_dynamodb():
         yield mock_client
 
 
+@pytest.fixture
+def mock_cloudwatch():
+    """Mock boto3 CloudWatch client."""
+    with patch("handler.cloudwatch") as mock_client:
+        mock_client.put_metric_data = MagicMock(return_value={})
+        yield mock_client
+
+
 def make_sqs_event(*eb_events: dict) -> dict:
     """Build an SQS event wrapping one or more EventBridge events."""
     return {

@@ -144,3 +144,91 @@ class TestStructuredLogging:
             assert "job_id" in entry
             assert "operation" in entry
             assert "connector_id" in entry
+
+
+class TestUnknownOperationType:
+    """Test unknown operation type handling (Story 2-2)."""
+
+    def _make_unknown_event(self):
+        return make_eb_event(
+            "SFTP Connector FutureOp Completed",
+            {
+                "future-id": "f-future001",
+                "connector-id": "c-01234567890abcdef",
+                "status-code": "COMPLETED",
+            },
+        )
+
+    def test_emits_metric_with_connector_id_dimension(self, mock_dynamodb, mock_cloudwatch):
+        from handler import lambda_handler
+
+        sqs_event = make_sqs_event(self._make_unknown_event())
+        lambda_handler(sqs_event, None)
+
+        mock_cloudwatch.put_metric_data.assert_called_once()
+        call_kwargs = mock_cloudwatch.put_metric_data.call_args[1]
+        assert call_kwargs["Namespace"] == "SftpConnectorHelper"
+        metric_with_dim = call_kwargs["MetricData"][0]
+        assert metric_with_dim["MetricName"] == "UnknownOperationType"
+        assert metric_with_dim["Dimensions"] == [{"Name": "ConnectorId", "Value": "c-01234567890abcdef"}]
+        assert metric_with_dim["Value"] == 1
+        assert metric_with_dim["Unit"] == "Count"
+
+    def test_emits_metric_without_dimension_aggregate(self, mock_dynamodb, mock_cloudwatch):
+        from handler import lambda_handler
+
+        sqs_event = make_sqs_event(self._make_unknown_event())
+        lambda_handler(sqs_event, None)
+
+        call_kwargs = mock_cloudwatch.put_metric_data.call_args[1]
+        metric_no_dim = call_kwargs["MetricData"][1]
+        assert metric_no_dim["MetricName"] == "UnknownOperationType"
+        assert "Dimensions" not in metric_no_dim
+        assert metric_no_dim["Value"] == 1
+        assert metric_no_dim["Unit"] == "Count"
+
+    def test_logs_warning_with_operation_and_connector_id(self, mock_dynamodb, mock_cloudwatch, caplog):
+        import logging
+        from handler import lambda_handler
+
+        sqs_event = make_sqs_event(self._make_unknown_event())
+
+        with caplog.at_level(logging.WARNING):
+            lambda_handler(sqs_event, None)
+
+        log_entries = [json.loads(r.message) for r in caplog.records if r.message.startswith("{") and "WARNING" in r.message]
+        assert len(log_entries) >= 1
+        entry = log_entries[0]
+        assert entry["level"] == "WARNING"
+        assert entry["operation"] == "SFTP Connector FutureOp Completed"
+        assert entry["connector_id"] == "c-01234567890abcdef"
+
+    def test_returns_successfully_no_exception(self, mock_dynamodb, mock_cloudwatch):
+        from handler import lambda_handler
+
+        sqs_event = make_sqs_event(self._make_unknown_event())
+        # Should not raise
+        result = lambda_handler(sqs_event, None)
+        # No DynamoDB write for unknown ops
+        mock_dynamodb.update_item.assert_not_called()
+
+    def test_batch_mixed_known_and_unknown_operations(self, mock_dynamodb, mock_cloudwatch):
+        from handler import lambda_handler
+
+        known_event = make_eb_event(
+            "SFTP Connector File Send Completed",
+            {
+                "transfer-id": "t-abc123",
+                "connector-id": "c-01234567890abcdef",
+                "status-code": "COMPLETED",
+            },
+        )
+        unknown_event = self._make_unknown_event()
+
+        sqs_event = make_sqs_event(known_event, unknown_event)
+        lambda_handler(sqs_event, None)
+
+        # Known event processed normally
+        mock_dynamodb.update_item.assert_called_once()
+        # Unknown event emitted metric
+        mock_cloudwatch.put_metric_data.assert_called_once()

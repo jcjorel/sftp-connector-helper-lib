@@ -1,5 +1,9 @@
 """Maps SFTP Connector detail-type prefixes to the ID field name in event detail."""
 
+
+class UnknownOperationError(Exception):
+    """Raised when the detail-type does not match any known operation."""
+
 OPERATION_MAP = {
     "SFTP Connector File Send": {
         "id_field": "transfer-id",
@@ -29,7 +33,7 @@ def get_operation_info(detail_type: str) -> dict:
     for prefix, info in OPERATION_MAP.items():
         if detail_type.startswith(prefix):
             return info
-    raise KeyError(f"Unknown detail-type: {detail_type}")
+    raise UnknownOperationError(f"Unknown detail-type: {detail_type}")
 
 
 def get_job_id(event_detail: dict, detail_type: str) -> tuple[str, str, bool]:
