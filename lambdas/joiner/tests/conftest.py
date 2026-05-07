@@ -36,6 +36,14 @@ def mock_table():
         yield mock_tbl
 
 
+@pytest.fixture
+def mock_sns():
+    """Mock boto3 SNS client."""
+    with patch("handler.sns") as mock_client:
+        mock_client.publish = MagicMock(return_value={})
+        yield mock_client
+
+
 def make_sqs_event(*stream_records: dict) -> dict:
     """Build an SQS event wrapping DynamoDB Stream records."""
     return {
@@ -72,6 +80,7 @@ def make_dynamo_image(
     metadata: str | None = None,
     event_result: str | None = None,
     transfer_id: str | None = None,
+    operation_type: str | None = None,
 ) -> dict:
     """Build a DynamoDB image with typed attributes."""
     image = {"jobId": {"S": job_id}, "ttl": {"N": "1715200000"}}
@@ -81,6 +90,8 @@ def make_dynamo_image(
         image["eventResult"] = {"S": event_result}
     if transfer_id is not None:
         image["transferId"] = {"S": transfer_id}
+    if operation_type is not None:
+        image["operationType"] = {"S": operation_type}
     return image
 
 

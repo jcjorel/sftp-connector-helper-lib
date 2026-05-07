@@ -9,6 +9,7 @@ from boto3.dynamodb.types import TypeDeserializer
 
 from log_util import log_structured
 from metadata_copy import copy_metadata_from_master, fan_out_metadata_to_per_file_records
+from orphan_detection import detect_orphan
 from publish import publish_enriched_event, validate_metadata
 
 logger = logging.getLogger()
@@ -16,9 +17,11 @@ logger.setLevel(logging.INFO)
 
 EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "sftp-connector-helper-bus")
 TABLE_NAME = os.environ.get("TABLE_NAME", "sftp-connector-helper")
+SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
 
 cloudwatch = boto3.client("cloudwatch")
 events = boto3.client("events")
+sns = boto3.client("sns")
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 
@@ -102,7 +105,10 @@ def _process_record(stream_record: dict) -> None:
     job_id = dynamodb_data.get("Keys", {}).get("jobId", {}).get("S", "unknown")
 
     if event_name == "REMOVE":
-        # Story 2-5: orphan detection
+        old_image_raw = dynamodb_data.get("OldImage")
+        if old_image_raw:
+            old_image = unmarshal(old_image_raw)
+            detect_orphan(table, old_image, job_id, sns, SNS_TOPIC_ARN, cloudwatch)
         return
 
     if event_name not in ("MODIFY", "INSERT"):
