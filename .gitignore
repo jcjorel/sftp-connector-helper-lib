@@ -1,0 +1,28 @@
+# Java
+target/
+*.class
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Python
+__pycache__/
+*.pyc
+dist/
+*.egg-info/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CDK
+cdk.out/
+node_modules/

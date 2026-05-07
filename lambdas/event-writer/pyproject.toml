@@ -1,0 +1,3 @@
+[project]
+name = "sftp-connector-event-writer"
+requires-python = ">=3.12"
