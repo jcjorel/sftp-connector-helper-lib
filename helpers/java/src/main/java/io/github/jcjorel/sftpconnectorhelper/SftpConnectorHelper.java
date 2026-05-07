@@ -7,8 +7,14 @@ import software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedExce
 import software.amazon.awssdk.services.dynamodb.model.DynamoDbException;
 import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest;
 import software.amazon.awssdk.services.transfer.TransferClient;
+import software.amazon.awssdk.services.transfer.model.StartDirectoryListingRequest;
+import software.amazon.awssdk.services.transfer.model.StartDirectoryListingResponse;
 import software.amazon.awssdk.services.transfer.model.StartFileTransferRequest;
 import software.amazon.awssdk.services.transfer.model.StartFileTransferResponse;
+import software.amazon.awssdk.services.transfer.model.StartRemoteDeleteRequest;
+import software.amazon.awssdk.services.transfer.model.StartRemoteDeleteResponse;
+import software.amazon.awssdk.services.transfer.model.StartRemoteMoveRequest;
+import software.amazon.awssdk.services.transfer.model.StartRemoteMoveResponse;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -63,12 +69,12 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
     /**
      * Starts a file transfer with metadata correlation.
-     * Validates metadata, executes the SDK call, then writes metadata to DynamoDB.
+     * Uses staggered TTL (+3600s) since this creates the master fan-out record.
      *
      * @param request  the StartFileTransfer SDK request
      * @param metadata the business metadata JSON string to correlate
      * @return the operation result indicating success or specific failure mode
-     * @throws IllegalArgumentException if metadata is invalid
+     * @throws IllegalArgumentException if request is null or metadata is invalid
      */
     public SftpOperationResult<StartFileTransferResponse> startFileTransfer(StartFileTransferRequest request, String metadata) {
         if (request == null) {
@@ -76,12 +82,72 @@ public final class SftpConnectorHelper implements AutoCloseable {
         }
         validateMetadata(metadata);
         StartFileTransferResponse response = transferClient.startFileTransfer(request);
-        String transferId = response.transferId();
-        long ttlEpochSeconds = Instant.now().getEpochSecond() + ttlDuration.toSeconds() + 3600;
+        return writeMetadataAndReturn(response, response.transferId(), metadata, true);
+    }
+
+    /**
+     * Starts a directory listing with metadata correlation.
+     * Uses standard TTL (no stagger).
+     *
+     * @param request  the StartDirectoryListing SDK request
+     * @param metadata the business metadata JSON string to correlate
+     * @return the operation result indicating success or specific failure mode
+     * @throws IllegalArgumentException if request is null or metadata is invalid
+     */
+    public SftpOperationResult<StartDirectoryListingResponse> startDirectoryListing(StartDirectoryListingRequest request, String metadata) {
+        if (request == null) {
+            throw new IllegalArgumentException("StartDirectoryListingRequest must not be null");
+        }
+        validateMetadata(metadata);
+        StartDirectoryListingResponse response = transferClient.startDirectoryListing(request);
+        return writeMetadataAndReturn(response, response.listingId(), metadata, false);
+    }
+
+    /**
+     * Starts a remote move with metadata correlation.
+     * Uses standard TTL (no stagger).
+     *
+     * @param request  the StartRemoteMove SDK request
+     * @param metadata the business metadata JSON string to correlate
+     * @return the operation result indicating success or specific failure mode
+     * @throws IllegalArgumentException if request is null or metadata is invalid
+     */
+    public SftpOperationResult<StartRemoteMoveResponse> startRemoteMove(StartRemoteMoveRequest request, String metadata) {
+        if (request == null) {
+            throw new IllegalArgumentException("StartRemoteMoveRequest must not be null");
+        }
+        validateMetadata(metadata);
+        StartRemoteMoveResponse response = transferClient.startRemoteMove(request);
+        return writeMetadataAndReturn(response, response.moveId(), metadata, false);
+    }
+
+    /**
+     * Starts a remote delete with metadata correlation.
+     * Uses standard TTL (no stagger).
+     *
+     * @param request  the StartRemoteDelete SDK request
+     * @param metadata the business metadata JSON string to correlate
+     * @return the operation result indicating success or specific failure mode
+     * @throws IllegalArgumentException if request is null or metadata is invalid
+     */
+    public SftpOperationResult<StartRemoteDeleteResponse> startRemoteDelete(StartRemoteDeleteRequest request, String metadata) {
+        if (request == null) {
+            throw new IllegalArgumentException("StartRemoteDeleteRequest must not be null");
+        }
+        validateMetadata(metadata);
+        StartRemoteDeleteResponse response = transferClient.startRemoteDelete(request);
+        return writeMetadataAndReturn(response, response.deleteId(), metadata, false);
+    }
+
+    private <T> SftpOperationResult<T> writeMetadataAndReturn(T response, String jobId, String metadata, boolean staggerTtl) {
+        if (jobId == null || jobId.isEmpty()) {
+            throw new IllegalStateException("SDK response returned null or empty job ID");
+        }
+        long ttlEpochSeconds = Instant.now().getEpochSecond() + ttlDuration.toSeconds() + (staggerTtl ? 3600 : 0);
 
         UpdateItemRequest updateRequest = UpdateItemRequest.builder()
                 .tableName(tableName)
-                .key(Map.of("jobId", AttributeValue.builder().s(transferId).build()))
+                .key(Map.of("jobId", AttributeValue.builder().s(jobId).build()))
                 .updateExpression("SET metadata = :m, #t = :t")
                 .expressionAttributeNames(Map.of("#t", "ttl"))
                 .expressionAttributeValues(Map.of(
@@ -95,9 +161,9 @@ public final class SftpConnectorHelper implements AutoCloseable {
             dynamoDbClient.updateItem(updateRequest);
             return new SftpOperationResult.Success<>(response);
         } catch (ConditionalCheckFailedException e) {
-            return new SftpOperationResult.MetadataAlreadyExists<>(response, transferId);
+            return new SftpOperationResult.MetadataAlreadyExists<>(response, jobId);
         } catch (DynamoDbException e) {
-            return new SftpOperationResult.MetadataWriteFailed<>(response, transferId, e);
+            return new SftpOperationResult.MetadataWriteFailed<>(response, jobId, e);
         }
     }
 
