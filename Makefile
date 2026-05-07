@@ -16,6 +16,9 @@ build-lambdas:
 
 build: build-java build-lambdas
 
+deploy: build-lambdas
+	cd cdk && cdk deploy
+
 test: test-java
 
 clean:
