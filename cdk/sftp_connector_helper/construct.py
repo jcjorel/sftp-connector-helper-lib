@@ -4,11 +4,15 @@ from typing import Optional
 
 import aws_cdk as cdk
 from aws_cdk import (
+    aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cw_actions,
     aws_dynamodb as dynamodb,
     aws_events as events,
     aws_events_targets as targets,
+    aws_iam as iam,
     aws_lambda as _lambda,
     aws_lambda_event_sources as lambda_event_sources,
+    aws_pipes as pipes,
     aws_sns as sns,
     aws_sqs as sqs,
 )
@@ -93,6 +97,7 @@ class SftpConnectorHelper(Construct):
         rule = events.Rule(
             self,
             "SftpConnectorEventRule",
+            rule_name="sftp-connector-helper-event-capture",
             event_pattern=events.EventPattern(
                 source=["aws.transfer"],
             ),
@@ -118,6 +123,7 @@ class SftpConnectorHelper(Construct):
             ),
             environment={
                 "TABLE_NAME": self._table.table_name,
+                "TTL_SECONDS": str(int(props.ttl_duration.to_seconds())),
             },
             memory_size=props.event_writer_memory,
             timeout=props.event_writer_timeout,
@@ -128,6 +134,137 @@ class SftpConnectorHelper(Construct):
         )
 
         self._table.grant(event_writer_lambda, "dynamodb:UpdateItem")
+
+        # Joiner Pipeline (only when construct owns the table — stream ARN required)
+        if not props.existing_table_arn:
+            # Task 1: SQS FIFO queue + DLQ
+            joiner_dlq = sqs.Queue(
+                self,
+                "JoinerDLQ",
+                queue_name="sftp-connector-helper-joiner-dlq.fifo",
+                fifo=True,
+            )
+
+            joiner_queue = sqs.Queue(
+                self,
+                "JoinerQueue",
+                queue_name="sftp-connector-helper-joiner.fifo",
+                fifo=True,
+                content_based_deduplication=False,
+                visibility_timeout=props.joiner_timeout,
+                dead_letter_queue=sqs.DeadLetterQueue(
+                    max_receive_count=3,
+                    queue=joiner_dlq,
+                ),
+            )
+
+            # Task 2: EventBridge Pipe (DynamoDB Streams → SQS FIFO)
+            pipe_dlq = sqs.Queue(
+                self,
+                "PipeDLQ",
+                queue_name="sftp-connector-helper-pipe-dlq",
+            )
+
+            pipe_role = iam.Role(
+                self,
+                "PipeRole",
+                assumed_by=iam.ServicePrincipal("pipes.amazonaws.com"),
+            )
+            self._table.grant_stream_read(pipe_role)
+            joiner_queue.grant_send_messages(pipe_role)
+            pipe_dlq.grant_send_messages(pipe_role)
+
+            pipe = pipes.CfnPipe(
+                self,
+                "StreamToJoinerPipe",
+                role_arn=pipe_role.role_arn,
+                source=self._table.table_stream_arn,
+                source_parameters=pipes.CfnPipe.PipeSourceParametersProperty(
+                    dynamo_db_stream_parameters=pipes.CfnPipe.PipeSourceDynamoDBStreamParametersProperty(
+                        starting_position="LATEST",
+                        batch_size=10,
+                        maximum_retry_attempts=3,
+                        maximum_record_age_in_seconds=3600,
+                        dead_letter_config=pipes.CfnPipe.DeadLetterConfigProperty(
+                            arn=pipe_dlq.queue_arn,
+                        ),
+                    ),
+                ),
+                target=joiner_queue.queue_arn,
+                target_parameters=pipes.CfnPipe.PipeTargetParametersProperty(
+                    sqs_queue_parameters=pipes.CfnPipe.PipeTargetSqsQueueParametersProperty(
+                        message_group_id="$.dynamodb.Keys.jobId.S",
+                        message_deduplication_id="$.eventID",
+                    ),
+                ),
+            )
+
+            # Ensure Pipe waits for IAM policy to be created (L1 construct issue)
+            pipe.node.add_dependency(pipe_role)
+
+            # Task 3: Joiner Lambda + IAM
+            joiner_lambda = _lambda.Function(
+                self,
+                "JoinerFunction",
+                runtime=_lambda.Runtime.PYTHON_3_12,
+                handler="handler.lambda_handler",
+                code=_lambda.Code.from_asset(
+                    str(Path(__file__).parent / "../../lambdas/joiner/dist")
+                ),
+                environment={
+                    "TABLE_NAME": self._table.table_name,
+                    "EVENT_BUS_NAME": self._event_bus.event_bus_name,
+                    "SNS_TOPIC_ARN": self._orphan_topic.topic_arn,
+                    "TTL_SECONDS": str(int(props.ttl_duration.to_seconds())),
+                },
+                memory_size=props.joiner_memory,
+                timeout=props.joiner_timeout,
+            )
+
+            self._table.grant(joiner_lambda, "dynamodb:UpdateItem", "dynamodb:GetItem")
+            joiner_lambda.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["dynamodb:Query"],
+                    resources=[f"{self._table.table_arn}/index/transferId-index"],
+                )
+            )
+            self._event_bus.grant_put_events_to(joiner_lambda)
+            joiner_lambda.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["cloudwatch:PutMetricData"],
+                    resources=["*"],
+                    conditions={"StringEquals": {"cloudwatch:namespace": "SftpConnectorHelper"}},
+                )
+            )
+            self._orphan_topic.grant_publish(joiner_lambda)
+
+            joiner_lambda.add_event_source(
+                lambda_event_sources.SqsEventSource(
+                    joiner_queue,
+                    report_batch_item_failures=True,
+                )
+            )
+
+            # Task 4: CloudWatch alarm on Pipe IteratorAge
+            pipe_iterator_age_alarm = cloudwatch.Alarm(
+                self,
+                "PipeIteratorAgeAlarm",
+                metric=cloudwatch.Metric(
+                    namespace="AWS/Pipes",
+                    metric_name="IteratorAge",
+                    dimensions_map={"PipeName": pipe.ref},
+                    statistic="Maximum",
+                    period=cdk.Duration.minutes(1),
+                ),
+                threshold=60000,  # 60 seconds in milliseconds
+                evaluation_periods=3,
+                datapoints_to_alarm=3,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                alarm_description="EventBridge Pipe IteratorAge > 60s — Joiner pipeline may be stalled",
+            )
+            pipe_iterator_age_alarm.add_alarm_action(
+                cw_actions.SnsAction(self._orphan_topic)
+            )
 
     @property
     def table(self) -> dynamodb.ITable:

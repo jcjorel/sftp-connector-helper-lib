@@ -192,6 +192,173 @@ class TestEventWriterPipeline:
         )
 
     def test_event_source_mapping_connects_queue_to_lambda(self, template_default):
-        template_default.resource_count_is(
-            "AWS::Lambda::EventSourceMapping", 1
+        template_default.has_resource_properties(
+            "AWS::Lambda::EventSourceMapping",
+            {
+                "EventSourceArn": Match.any_value(),
+            },
         )
+
+
+class TestJoinerPipeline:
+    def test_joiner_queue_is_fifo_with_fixed_name(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::SQS::Queue",
+            {
+                "QueueName": "sftp-connector-helper-joiner.fifo",
+                "FifoQueue": True,
+                "ContentBasedDeduplication": False,
+            },
+        )
+
+    def test_joiner_dlq_exists(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::SQS::Queue",
+            {
+                "QueueName": "sftp-connector-helper-joiner-dlq.fifo",
+                "FifoQueue": True,
+            },
+        )
+
+    def test_pipe_dlq_exists(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::SQS::Queue",
+            {
+                "QueueName": "sftp-connector-helper-pipe-dlq",
+            },
+        )
+
+    def test_joiner_lambda_environment(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::Lambda::Function",
+            {
+                "Environment": {
+                    "Variables": Match.object_like(
+                        {
+                            "TABLE_NAME": Match.any_value(),
+                            "EVENT_BUS_NAME": Match.any_value(),
+                            "SNS_TOPIC_ARN": Match.any_value(),
+                        }
+                    ),
+                },
+                "Handler": "handler.lambda_handler",
+                "Runtime": "python3.12",
+            },
+        )
+
+    def test_joiner_lambda_iam_has_required_permissions(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::IAM::Policy",
+            {
+                "PolicyDocument": {
+                    "Statement": Match.array_with(
+                        [
+                            Match.object_like(
+                                {
+                                    "Action": [
+                                        "dynamodb:UpdateItem",
+                                        "dynamodb:GetItem",
+                                    ],
+                                    "Effect": "Allow",
+                                }
+                            ),
+                        ]
+                    ),
+                },
+            },
+        )
+
+    def test_cloudwatch_alarm_exists(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::CloudWatch::Alarm",
+            {
+                "MetricName": "IteratorAge",
+                "Namespace": "AWS/Pipes",
+                "Threshold": 60000,
+                "EvaluationPeriods": 3,
+                "DatapointsToAlarm": 3,
+            },
+        )
+
+    def test_pipe_exists(self, template_default):
+        template_default.resource_count_is("AWS::Pipes::Pipe", 1)
+
+    def test_event_source_mappings_count(self, template_default):
+        # 2 mappings: Event Writer (SQS→Lambda) + Joiner (SQS FIFO→Lambda)
+        template_default.resource_count_is(
+            "AWS::Lambda::EventSourceMapping", 2
+        )
+
+
+class TestConfigurationOverrides:
+    def test_custom_ttl_in_event_writer_environment(self, template_override):
+        template_override.has_resource_properties(
+            "AWS::Lambda::Function",
+            {
+                "Environment": {
+                    "Variables": Match.object_like(
+                        {"TTL_SECONDS": "172800"}
+                    ),
+                },
+                "Handler": "handler.lambda_handler",
+            },
+        )
+
+    def test_custom_memory_applied(self, template_override):
+        template_override.has_resource_properties(
+            "AWS::Lambda::Function",
+            {"MemorySize": 512},
+        )
+
+    def test_custom_timeout_applied(self, template_override):
+        template_override.has_resource_properties(
+            "AWS::Lambda::Function",
+            {"Timeout": 60},
+        )
+
+    def test_default_ttl_in_environment(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::Lambda::Function",
+            {
+                "Environment": {
+                    "Variables": Match.object_like(
+                        {"TTL_SECONDS": "86400"}
+                    ),
+                },
+            },
+        )
+
+
+class TestSingletonEnforcement:
+    def test_event_rule_has_fixed_name(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::Events::Rule",
+            {"Name": "sftp-connector-helper-event-capture"},
+        )
+
+    def test_all_fixed_name_resources_exist(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::SQS::Queue",
+            {"QueueName": "sftp-connector-helper-event-writer"},
+        )
+        template_default.has_resource_properties(
+            "AWS::SQS::Queue",
+            {"QueueName": "sftp-connector-helper-joiner.fifo"},
+        )
+        template_default.has_resource_properties(
+            "AWS::Events::Rule",
+            {"Name": "sftp-connector-helper-event-capture"},
+        )
+
+
+class TestSnapshotOverride:
+    def test_override_snapshot(self, template_override):
+        SNAPSHOT_DIR.mkdir(exist_ok=True)
+        snapshot_file = SNAPSHOT_DIR / "override_template.json"
+        rendered = template_override.to_json()
+
+        if not snapshot_file.exists():
+            snapshot_file.write_text(json.dumps(rendered, indent=2))
+
+        expected = json.loads(snapshot_file.read_text())
+        assert rendered == expected

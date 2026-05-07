@@ -250,11 +250,11 @@
             "TABLE_NAME": {
               "Ref": "HelperTable7DF2E3E7"
             },
-            "TTL_SECONDS": "86400"
+            "TTL_SECONDS": "172800"
           }
         },
         "Handler": "handler.lambda_handler",
-        "MemorySize": 256,
+        "MemorySize": 512,
         "Role": {
           "Fn::GetAtt": [
             "HelperEventWriterFunctionServiceRole6A1CD748",
@@ -262,7 +262,7 @@
           ]
         },
         "Runtime": "python3.12",
-        "Timeout": 30
+        "Timeout": 60
       },
       "DependsOn": [
         "HelperEventWriterFunctionServiceRoleDefaultPolicyC4E6B44A",
@@ -307,7 +307,7 @@
           },
           "maxReceiveCount": 3
         },
-        "VisibilityTimeout": 30
+        "VisibilityTimeout": 60
       },
       "UpdateReplacePolicy": "Delete",
       "DeletionPolicy": "Delete"
@@ -606,11 +606,11 @@
             "SNS_TOPIC_ARN": {
               "Ref": "HelperOrphanAlertTopic85AE8894"
             },
-            "TTL_SECONDS": "86400"
+            "TTL_SECONDS": "172800"
           }
         },
         "Handler": "handler.lambda_handler",
-        "MemorySize": 256,
+        "MemorySize": 512,
         "Role": {
           "Fn::GetAtt": [
             "HelperJoinerFunctionServiceRole204AA3FE",
@@ -618,7 +618,7 @@
           ]
         },
         "Runtime": "python3.12",
-        "Timeout": 30
+        "Timeout": 60
       },
       "DependsOn": [
         "HelperJoinerFunctionServiceRoleDefaultPolicy87A509D5",
