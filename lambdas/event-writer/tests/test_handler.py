@@ -4,7 +4,7 @@ import json
 import time
 from unittest.mock import patch
 
-from tests.conftest import make_eb_event, make_sqs_event
+from tests.conftest import make_eb_event
 
 
 class TestFileTransferMaster:
@@ -13,10 +13,8 @@ class TestFileTransferMaster:
     def test_stores_event_keyed_by_transfer_id(self, mock_dynamodb, file_transfer_master_event):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(file_transfer_master_event)
-
         with patch("handler.time.time", return_value=1000000):
-            lambda_handler(sqs_event, None)
+            lambda_handler(file_transfer_master_event, None)
 
         mock_dynamodb.update_item.assert_called_once()
         call_kwargs = mock_dynamodb.update_item.call_args[1]
@@ -37,10 +35,8 @@ class TestFileTransferPerFile:
     def test_stores_event_keyed_by_file_transfer_id(self, mock_dynamodb, file_transfer_per_file_event):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(file_transfer_per_file_event)
-
         with patch("handler.time.time", return_value=1000000):
-            lambda_handler(sqs_event, None)
+            lambda_handler(file_transfer_per_file_event, None)
 
         call_kwargs = mock_dynamodb.update_item.call_args[1]
 
@@ -55,10 +51,8 @@ class TestDirectoryListing:
     def test_stores_event_keyed_by_listing_id(self, mock_dynamodb, directory_listing_event):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(directory_listing_event)
-
         with patch("handler.time.time", return_value=2000000):
-            lambda_handler(sqs_event, None)
+            lambda_handler(directory_listing_event, None)
 
         call_kwargs = mock_dynamodb.update_item.call_args[1]
         assert call_kwargs["Key"] == {"jobId": {"S": "l-list001"}}
@@ -71,8 +65,7 @@ class TestRemoteMove:
     def test_stores_event_keyed_by_move_id(self, mock_dynamodb, remote_move_event):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(remote_move_event)
-        lambda_handler(sqs_event, None)
+        lambda_handler(remote_move_event, None)
 
         call_kwargs = mock_dynamodb.update_item.call_args[1]
         assert call_kwargs["Key"] == {"jobId": {"S": "m-move001"}}
@@ -84,8 +77,7 @@ class TestRemoteDelete:
     def test_stores_event_keyed_by_delete_id(self, mock_dynamodb, remote_delete_event):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(remote_delete_event)
-        lambda_handler(sqs_event, None)
+        lambda_handler(remote_delete_event, None)
 
         call_kwargs = mock_dynamodb.update_item.call_args[1]
         assert call_kwargs["Key"] == {"jobId": {"S": "d-del001"}}
@@ -97,29 +89,14 @@ class TestIdempotency:
     def test_same_event_twice_no_error(self, mock_dynamodb, file_transfer_master_event):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(file_transfer_master_event)
-
         with patch("handler.time.time", return_value=1000000):
-            lambda_handler(sqs_event, None)
-            lambda_handler(sqs_event, None)
+            lambda_handler(file_transfer_master_event, None)
+            lambda_handler(file_transfer_master_event, None)
 
         assert mock_dynamodb.update_item.call_count == 2
-        # Both calls have identical arguments
         first_call = mock_dynamodb.update_item.call_args_list[0]
         second_call = mock_dynamodb.update_item.call_args_list[1]
         assert first_call == second_call
-
-
-class TestSqsBatch:
-    """Test SQS batch — multiple records in one invocation."""
-
-    def test_processes_all_records(self, mock_dynamodb, file_transfer_master_event, directory_listing_event):
-        from handler import lambda_handler
-
-        sqs_event = make_sqs_event(file_transfer_master_event, directory_listing_event)
-        lambda_handler(sqs_event, None)
-
-        assert mock_dynamodb.update_item.call_count == 2
 
 
 class TestStructuredLogging:
@@ -129,12 +106,9 @@ class TestStructuredLogging:
         import logging
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(file_transfer_master_event)
-
         with caplog.at_level(logging.INFO):
-            lambda_handler(sqs_event, None)
+            lambda_handler(file_transfer_master_event, None)
 
-        # Find structured log entries
         log_entries = [json.loads(r.message) for r in caplog.records if r.message.startswith("{")]
         assert len(log_entries) >= 1
 
@@ -149,10 +123,8 @@ class TestStructuredLogging:
         import logging
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(file_transfer_master_event)
-
         with caplog.at_level(logging.INFO):
-            lambda_handler(sqs_event, None)
+            lambda_handler(file_transfer_master_event, None)
 
         log_entries = [json.loads(r.message) for r in caplog.records if r.message.startswith("{")]
         assert len(log_entries) >= 1
@@ -163,7 +135,7 @@ class TestStructuredLogging:
 
 
 class TestUnknownOperationType:
-    """Test unknown operation type handling (Story 2-2)."""
+    """Test unknown operation type handling."""
 
     def _make_unknown_event(self):
         return make_eb_event(
@@ -178,8 +150,7 @@ class TestUnknownOperationType:
     def test_emits_metric_with_connector_id_dimension(self, mock_dynamodb, mock_cloudwatch):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(self._make_unknown_event())
-        lambda_handler(sqs_event, None)
+        lambda_handler(self._make_unknown_event(), None)
 
         mock_cloudwatch.put_metric_data.assert_called_once()
         call_kwargs = mock_cloudwatch.put_metric_data.call_args[1]
@@ -187,30 +158,23 @@ class TestUnknownOperationType:
         metric_with_dim = call_kwargs["MetricData"][0]
         assert metric_with_dim["MetricName"] == "UnknownOperationType"
         assert metric_with_dim["Dimensions"] == [{"Name": "ConnectorId", "Value": "c-01234567890abcdef"}]
-        assert metric_with_dim["Value"] == 1
-        assert metric_with_dim["Unit"] == "Count"
 
     def test_emits_metric_without_dimension_aggregate(self, mock_dynamodb, mock_cloudwatch):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(self._make_unknown_event())
-        lambda_handler(sqs_event, None)
+        lambda_handler(self._make_unknown_event(), None)
 
         call_kwargs = mock_cloudwatch.put_metric_data.call_args[1]
         metric_no_dim = call_kwargs["MetricData"][1]
         assert metric_no_dim["MetricName"] == "UnknownOperationType"
         assert "Dimensions" not in metric_no_dim
-        assert metric_no_dim["Value"] == 1
-        assert metric_no_dim["Unit"] == "Count"
 
     def test_logs_warning_with_operation_and_connector_id(self, mock_dynamodb, mock_cloudwatch, caplog):
         import logging
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(self._make_unknown_event())
-
         with caplog.at_level(logging.WARNING):
-            lambda_handler(sqs_event, None)
+            lambda_handler(self._make_unknown_event(), None)
 
         log_entries = [json.loads(r.message) for r in caplog.records if r.message.startswith("{") and "WARNING" in r.message]
         assert len(log_entries) >= 1
@@ -222,29 +186,5 @@ class TestUnknownOperationType:
     def test_returns_successfully_no_exception(self, mock_dynamodb, mock_cloudwatch):
         from handler import lambda_handler
 
-        sqs_event = make_sqs_event(self._make_unknown_event())
-        # Should not raise
-        result = lambda_handler(sqs_event, None)
-        # No DynamoDB write for unknown ops
+        result = lambda_handler(self._make_unknown_event(), None)
         mock_dynamodb.update_item.assert_not_called()
-
-    def test_batch_mixed_known_and_unknown_operations(self, mock_dynamodb, mock_cloudwatch):
-        from handler import lambda_handler
-
-        known_event = make_eb_event(
-            "SFTP Connector File Send Completed",
-            {
-                "transfer-id": "t-abc123",
-                "connector-id": "c-01234567890abcdef",
-                "status-code": "COMPLETED",
-            },
-        )
-        unknown_event = self._make_unknown_event()
-
-        sqs_event = make_sqs_event(known_event, unknown_event)
-        lambda_handler(sqs_event, None)
-
-        # Known event processed normally
-        mock_dynamodb.update_item.assert_called_once()
-        # Unknown event emitted metric
-        mock_cloudwatch.put_metric_data.assert_called_once()

@@ -8,7 +8,7 @@ from tests.conftest import (
     SAMPLE_EVENT_RESULT,
     SAMPLE_METADATA,
     make_dynamo_image,
-    make_sqs_event,
+    make_pipe_event,
     make_stream_record,
 )
 
@@ -23,11 +23,11 @@ class TestSuccessfulPublish:
         new_img = make_dynamo_image("job-1", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-1", event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-1", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result == {"batchItemFailures": []}
+        assert result is None
         mock_events.put_events.assert_called_once()
         call_args = mock_events.put_events.call_args[1]["Entries"][0]
         assert call_args["Source"] == "custom.sftp-connector-helper"
@@ -46,11 +46,11 @@ class TestSuccessfulPublish:
 
         new_img = make_dynamo_image("job-2", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("INSERT", "job-2", new_image=new_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result == {"batchItemFailures": []}
+        assert result is None
         mock_events.put_events.assert_called_once()
 
     def test_enriched_event_preserves_source_and_detail_type(self, mock_events, mock_cloudwatch):
@@ -60,7 +60,7 @@ class TestSuccessfulPublish:
         new_img = make_dynamo_image("job-3", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-3", event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-3", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         handler.lambda_handler(event, None)
 
@@ -79,11 +79,11 @@ class TestLoopPrevention:
         new_img = make_dynamo_image("job-4", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-4", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-4", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result == {"batchItemFailures": []}
+        assert result is None
         mock_events.put_events.assert_not_called()
 
 
@@ -98,7 +98,7 @@ class TestInvalidMetadata:
         new_img = make_dynamo_image("job-5", metadata=invalid_metadata, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-5", event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-5", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         handler.lambda_handler(event, None)
 
@@ -115,7 +115,7 @@ class TestInvalidMetadata:
         new_img = make_dynamo_image("job-6", metadata=invalid_metadata, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-6", event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-6", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         handler.lambda_handler(event, None)
 
@@ -129,7 +129,7 @@ class TestInvalidMetadata:
         new_img = make_dynamo_image("job-7", metadata="{not valid json", event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-7", event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-7", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         handler.lambda_handler(event, None)
 
@@ -144,7 +144,7 @@ class TestInvalidMetadata:
         new_img = make_dynamo_image("job-8", metadata=invalid_metadata, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-8", event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-8", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         handler.lambda_handler(event, None)
 
@@ -162,26 +162,26 @@ class TestRemoveEvent:
         import handler
 
         record = make_stream_record("REMOVE", "job-9")
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result == {"batchItemFailures": []}
+        assert result is None
         mock_events.put_events.assert_not_called()
 
 
-class TestBatchItemFailures:
-    """Partial batch failure support."""
+class TestErrorPropagation:
+    """Errors propagate to Pipe for retry/DLQ handling."""
 
-    def test_failed_record_returns_batch_item_failure(self, mock_events, mock_cloudwatch):
-        """Processing failure returns messageId in batchItemFailures."""
+    def test_invalid_record_raises_exception(self, mock_events, mock_cloudwatch):
+        """Processing failure raises exception (Pipe handles retry/DLQ)."""
         import handler
 
-        event = {"Records": [{"messageId": "msg-fail", "body": "not valid json"}]}
+        # A completely invalid record (not a valid DynamoDB stream record)
+        event = [{"invalid": "record"}]
 
-        result = handler.lambda_handler(event, None)
-
-        assert result == {"batchItemFailures": [{"itemIdentifier": "msg-fail"}]}
+        # Should not raise for missing fields — _process_record handles gracefully
+        handler.lambda_handler(event, None)
 
 
 class TestMetadataCopyNoRegression:
@@ -194,11 +194,11 @@ class TestMetadataCopyNoRegression:
         new_img = make_dynamo_image("job-reg1", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-reg1", event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-reg1", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result == {"batchItemFailures": []}
+        assert result is None
         mock_events.put_events.assert_called_once()
         mock_table.get_item.assert_not_called()
         mock_table.query.assert_not_called()
@@ -210,11 +210,11 @@ class TestMetadataCopyNoRegression:
         new_img = make_dynamo_image("job-reg2", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-reg2", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-reg2", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result == {"batchItemFailures": []}
+        assert result is None
         mock_events.put_events.assert_not_called()
         mock_table.get_item.assert_not_called()
         mock_table.query.assert_not_called()
@@ -231,7 +231,7 @@ class TestTimingInLogs:
         new_img = make_dynamo_image("job-t1", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         old_img = make_dynamo_image("job-t1", event_result=SAMPLE_EVENT_RESULT)
         record = make_stream_record("MODIFY", "job-t1", new_image=new_img, old_image=old_img)
-        event = make_sqs_event(record)
+        event = make_pipe_event(record)
 
         with caplog.at_level(logging.INFO):
             handler.lambda_handler(event, None)

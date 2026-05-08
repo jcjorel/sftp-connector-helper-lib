@@ -64,34 +64,13 @@
       "UpdateReplacePolicy": "Delete",
       "DeletionPolicy": "Delete"
     },
-    "HelperEventWriterQueueDBA8FFE2": {
-      "Type": "AWS::SQS::Queue",
-      "Properties": {
-        "QueueName": "sftp-connector-helper-event-writer",
-        "RedrivePolicy": {
-          "deadLetterTargetArn": {
-            "Fn::GetAtt": [
-              "HelperEventWriterDLQ7EAE9D0B",
-              "Arn"
-            ]
-          },
-          "maxReceiveCount": 3
-        }
-      },
-      "UpdateReplacePolicy": "Delete",
-      "DeletionPolicy": "Delete"
-    },
-    "HelperEventWriterQueuePolicy6C07CB75": {
+    "HelperEventWriterDLQPolicyA78A6F34": {
       "Type": "AWS::SQS::QueuePolicy",
       "Properties": {
         "PolicyDocument": {
           "Statement": [
             {
-              "Action": [
-                "sqs:SendMessage",
-                "sqs:GetQueueAttributes",
-                "sqs:GetQueueUrl"
-              ],
+              "Action": "sqs:SendMessage",
               "Condition": {
                 "ArnEquals": {
                   "aws:SourceArn": {
@@ -108,45 +87,18 @@
               },
               "Resource": {
                 "Fn::GetAtt": [
-                  "HelperEventWriterQueueDBA8FFE2",
+                  "HelperEventWriterDLQ7EAE9D0B",
                   "Arn"
                 ]
-              }
+              },
+              "Sid": "AllowEventRuleTestStackHelperSftpConnectorEventRule850678FE"
             }
           ],
           "Version": "2012-10-17"
         },
         "Queues": [
           {
-            "Ref": "HelperEventWriterQueueDBA8FFE2"
-          }
-        ]
-      }
-    },
-    "HelperSftpConnectorEventRule81000858": {
-      "Type": "AWS::Events::Rule",
-      "Properties": {
-        "EventPattern": {
-          "source": [
-            "aws.transfer"
-          ],
-          "detail-type": [
-            {
-              "prefix": "SFTP Connector"
-            }
-          ]
-        },
-        "Name": "sftp-connector-helper-event-capture",
-        "State": "ENABLED",
-        "Targets": [
-          {
-            "Arn": {
-              "Fn::GetAtt": [
-                "HelperEventWriterQueueDBA8FFE2",
-                "Arn"
-              ]
-            },
-            "Id": "Target0"
+            "Ref": "HelperEventWriterDLQ7EAE9D0B"
           }
         ]
       }
@@ -197,22 +149,6 @@
         "PolicyDocument": {
           "Statement": [
             {
-              "Action": [
-                "sqs:ReceiveMessage",
-                "sqs:ChangeMessageVisibility",
-                "sqs:GetQueueUrl",
-                "sqs:DeleteMessage",
-                "sqs:GetQueueAttributes"
-              ],
-              "Effect": "Allow",
-              "Resource": {
-                "Fn::GetAtt": [
-                  "HelperEventWriterQueueDBA8FFE2",
-                  "Arn"
-                ]
-              }
-            },
-            {
               "Action": "dynamodb:UpdateItem",
               "Effect": "Allow",
               "Resource": {
@@ -240,7 +176,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "616554ae220596955ef2cb56ad47b19f98c9e3fe2bb20c7354e97e6000d6ffca.zip"
+          "S3Key": "e84239cdf7455170a5ebc9af899ffb75ad43887a310dd635b13ded9cc48c78ad.zip"
         },
         "Environment": {
           "Variables": {
@@ -271,48 +207,63 @@
         "HelperEventWriterFunctionServiceRole6A1CD748"
       ]
     },
-    "HelperEventWriterFunctionSqsEventSourceTestStackHelperEventWriterQueue67D227DECA651C61": {
-      "Type": "AWS::Lambda::EventSourceMapping",
+    "HelperSftpConnectorEventRule81000858": {
+      "Type": "AWS::Events::Rule",
       "Properties": {
-        "EventSourceArn": {
+        "EventPattern": {
+          "source": [
+            "aws.transfer"
+          ],
+          "detail-type": [
+            {
+              "prefix": "SFTP Connector"
+            }
+          ]
+        },
+        "Name": "sftp-connector-helper-event-capture",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "HelperEventWriterFunction16141064",
+                "Arn"
+              ]
+            },
+            "DeadLetterConfig": {
+              "Arn": {
+                "Fn::GetAtt": [
+                  "HelperEventWriterDLQ7EAE9D0B",
+                  "Arn"
+                ]
+              }
+            },
+            "Id": "Target0",
+            "RetryPolicy": {
+              "MaximumRetryAttempts": 2
+            }
+          }
+        ]
+      }
+    },
+    "HelperSftpConnectorEventRuleAllowEventRuleTestStackHelperEventWriterFunction332FE10425400AF9": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
           "Fn::GetAtt": [
-            "HelperEventWriterQueueDBA8FFE2",
+            "HelperEventWriterFunction16141064",
             "Arn"
           ]
         },
-        "FunctionName": {
-          "Ref": "HelperEventWriterFunction16141064"
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "HelperSftpConnectorEventRule81000858",
+            "Arn"
+          ]
         }
       }
-    },
-    "HelperJoinerDLQA6BE9741": {
-      "Type": "AWS::SQS::Queue",
-      "Properties": {
-        "FifoQueue": true,
-        "QueueName": "sftp-connector-helper-joiner-dlq.fifo"
-      },
-      "UpdateReplacePolicy": "Delete",
-      "DeletionPolicy": "Delete"
-    },
-    "HelperJoinerQueueBD29E65E": {
-      "Type": "AWS::SQS::Queue",
-      "Properties": {
-        "ContentBasedDeduplication": false,
-        "FifoQueue": true,
-        "QueueName": "sftp-connector-helper-joiner.fifo",
-        "RedrivePolicy": {
-          "deadLetterTargetArn": {
-            "Fn::GetAtt": [
-              "HelperJoinerDLQA6BE9741",
-              "Arn"
-            ]
-          },
-          "maxReceiveCount": 3
-        },
-        "VisibilityTimeout": 30
-      },
-      "UpdateReplacePolicy": "Delete",
-      "DeletionPolicy": "Delete"
     },
     "HelperPipeDLQ9E009959": {
       "Type": "AWS::SQS::Queue",
@@ -321,131 +272,6 @@
       },
       "UpdateReplacePolicy": "Delete",
       "DeletionPolicy": "Delete"
-    },
-    "HelperPipeRoleFBECD364": {
-      "Type": "AWS::IAM::Role",
-      "Properties": {
-        "AssumeRolePolicyDocument": {
-          "Statement": [
-            {
-              "Action": "sts:AssumeRole",
-              "Effect": "Allow",
-              "Principal": {
-                "Service": "pipes.amazonaws.com"
-              }
-            }
-          ],
-          "Version": "2012-10-17"
-        }
-      }
-    },
-    "HelperPipeRoleDefaultPolicy164F26B5": {
-      "Type": "AWS::IAM::Policy",
-      "Properties": {
-        "PolicyDocument": {
-          "Statement": [
-            {
-              "Action": [
-                "dynamodb:DescribeStream",
-                "dynamodb:GetRecords",
-                "dynamodb:GetShardIterator",
-                "dynamodb:ListStreams"
-              ],
-              "Effect": "Allow",
-              "Resource": {
-                "Fn::GetAtt": [
-                  "HelperTable7DF2E3E7",
-                  "StreamArn"
-                ]
-              }
-            },
-            {
-              "Action": [
-                "sqs:SendMessage",
-                "sqs:GetQueueAttributes",
-                "sqs:GetQueueUrl"
-              ],
-              "Effect": "Allow",
-              "Resource": {
-                "Fn::GetAtt": [
-                  "HelperJoinerQueueBD29E65E",
-                  "Arn"
-                ]
-              }
-            },
-            {
-              "Action": [
-                "sqs:SendMessage",
-                "sqs:GetQueueAttributes",
-                "sqs:GetQueueUrl"
-              ],
-              "Effect": "Allow",
-              "Resource": {
-                "Fn::GetAtt": [
-                  "HelperPipeDLQ9E009959",
-                  "Arn"
-                ]
-              }
-            }
-          ],
-          "Version": "2012-10-17"
-        },
-        "PolicyName": "HelperPipeRoleDefaultPolicy164F26B5",
-        "Roles": [
-          {
-            "Ref": "HelperPipeRoleFBECD364"
-          }
-        ]
-      }
-    },
-    "HelperStreamToJoinerPipe93410418": {
-      "Type": "AWS::Pipes::Pipe",
-      "Properties": {
-        "RoleArn": {
-          "Fn::GetAtt": [
-            "HelperPipeRoleFBECD364",
-            "Arn"
-          ]
-        },
-        "Source": {
-          "Fn::GetAtt": [
-            "HelperTable7DF2E3E7",
-            "StreamArn"
-          ]
-        },
-        "SourceParameters": {
-          "DynamoDBStreamParameters": {
-            "BatchSize": 10,
-            "DeadLetterConfig": {
-              "Arn": {
-                "Fn::GetAtt": [
-                  "HelperPipeDLQ9E009959",
-                  "Arn"
-                ]
-              }
-            },
-            "MaximumRecordAgeInSeconds": 3600,
-            "MaximumRetryAttempts": 3,
-            "StartingPosition": "LATEST"
-          }
-        },
-        "Target": {
-          "Fn::GetAtt": [
-            "HelperJoinerQueueBD29E65E",
-            "Arn"
-          ]
-        },
-        "TargetParameters": {
-          "SqsQueueParameters": {
-            "MessageDeduplicationId": "$.eventID",
-            "MessageGroupId": "$.dynamodb.Keys.jobId.S"
-          }
-        }
-      },
-      "DependsOn": [
-        "HelperPipeRoleDefaultPolicy164F26B5",
-        "HelperPipeRoleFBECD364"
-      ]
     },
     "HelperJoinerLogGroup36E0D152": {
       "Type": "AWS::Logs::LogGroup",
@@ -549,22 +375,6 @@
               "Resource": {
                 "Ref": "HelperOrphanAlertTopic85AE8894"
               }
-            },
-            {
-              "Action": [
-                "sqs:ReceiveMessage",
-                "sqs:ChangeMessageVisibility",
-                "sqs:GetQueueUrl",
-                "sqs:DeleteMessage",
-                "sqs:GetQueueAttributes"
-              ],
-              "Effect": "Allow",
-              "Resource": {
-                "Fn::GetAtt": [
-                  "HelperJoinerQueueBD29E65E",
-                  "Arn"
-                ]
-              }
             }
           ],
           "Version": "2012-10-17"
@@ -584,7 +394,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "ab78926134763da9a6e72891248358c43defa2c4cc397b220a4d8332ff794af1.zip"
+          "S3Key": "e1c4b83afb617b1d540df1bbd3fea67c1b392781c6ee2d0044c254e6e7555e93.zip"
         },
         "Environment": {
           "Variables": {
@@ -621,22 +431,126 @@
         "HelperJoinerFunctionServiceRole204AA3FE"
       ]
     },
-    "HelperJoinerFunctionSqsEventSourceTestStackHelperJoinerQueueDB34245424D31E8D": {
-      "Type": "AWS::Lambda::EventSourceMapping",
+    "HelperPipeRoleFBECD364": {
+      "Type": "AWS::IAM::Role",
       "Properties": {
-        "EventSourceArn": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "pipes.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      }
+    },
+    "HelperPipeRoleDefaultPolicy164F26B5": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "dynamodb:DescribeStream",
+                "dynamodb:GetRecords",
+                "dynamodb:GetShardIterator",
+                "dynamodb:ListStreams"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HelperTable7DF2E3E7",
+                  "StreamArn"
+                ]
+              }
+            },
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HelperJoinerFunctionA0CC96B0",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Action": [
+                "sqs:SendMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl"
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HelperPipeDLQ9E009959",
+                  "Arn"
+                ]
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "HelperPipeRoleDefaultPolicy164F26B5",
+        "Roles": [
+          {
+            "Ref": "HelperPipeRoleFBECD364"
+          }
+        ]
+      }
+    },
+    "HelperStreamToJoinerPipe93410418": {
+      "Type": "AWS::Pipes::Pipe",
+      "Properties": {
+        "RoleArn": {
           "Fn::GetAtt": [
-            "HelperJoinerQueueBD29E65E",
+            "HelperPipeRoleFBECD364",
             "Arn"
           ]
         },
-        "FunctionName": {
-          "Ref": "HelperJoinerFunctionA0CC96B0"
+        "Source": {
+          "Fn::GetAtt": [
+            "HelperTable7DF2E3E7",
+            "StreamArn"
+          ]
         },
-        "FunctionResponseTypes": [
-          "ReportBatchItemFailures"
-        ]
-      }
+        "SourceParameters": {
+          "DynamoDBStreamParameters": {
+            "BatchSize": 1,
+            "DeadLetterConfig": {
+              "Arn": {
+                "Fn::GetAtt": [
+                  "HelperPipeDLQ9E009959",
+                  "Arn"
+                ]
+              }
+            },
+            "MaximumBatchingWindowInSeconds": 0,
+            "MaximumRecordAgeInSeconds": 3600,
+            "MaximumRetryAttempts": 3,
+            "StartingPosition": "LATEST"
+          }
+        },
+        "Target": {
+          "Fn::GetAtt": [
+            "HelperJoinerFunctionA0CC96B0",
+            "Arn"
+          ]
+        },
+        "TargetParameters": {
+          "LambdaFunctionParameters": {
+            "InvocationType": "REQUEST_RESPONSE"
+          }
+        }
+      },
+      "DependsOn": [
+        "HelperPipeRoleDefaultPolicy164F26B5",
+        "HelperPipeRoleFBECD364"
+      ]
     },
     "HelperPipeIteratorAgeAlarm4E670B02": {
       "Type": "AWS::CloudWatch::Alarm",

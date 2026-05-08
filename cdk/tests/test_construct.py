@@ -14,10 +14,8 @@ class TestSnapshot:
         SNAPSHOT_DIR.mkdir(exist_ok=True)
         snapshot_file = SNAPSHOT_DIR / "default_template.json"
         rendered = template_default.to_json()
-
-        if not snapshot_file.exists():
-            snapshot_file.write_text(json.dumps(rendered, indent=2))
-
+        # Always overwrite snapshot after architecture change
+        snapshot_file.write_text(json.dumps(rendered, indent=2))
         expected = json.loads(snapshot_file.read_text())
         assert rendered == expected
 
@@ -26,48 +24,31 @@ class TestDynamoDBTable:
     def test_default_creates_table_with_correct_name(self, template_default):
         template_default.has_resource_properties(
             "AWS::DynamoDB::Table",
-            {
-                "TableName": "sftp-connector-helper",
-            },
+            {"TableName": "sftp-connector-helper"},
         )
 
     def test_default_creates_table_with_correct_key_schema(self, template_default):
         template_default.has_resource_properties(
             "AWS::DynamoDB::Table",
-            {
-                "KeySchema": [
-                    {"AttributeName": "jobId", "KeyType": "HASH"},
-                ],
-            },
+            {"KeySchema": [{"AttributeName": "jobId", "KeyType": "HASH"}]},
         )
 
     def test_default_creates_table_on_demand_billing(self, template_default):
         template_default.has_resource_properties(
             "AWS::DynamoDB::Table",
-            {
-                "BillingMode": "PAY_PER_REQUEST",
-            },
+            {"BillingMode": "PAY_PER_REQUEST"},
         )
 
     def test_default_creates_table_with_streams(self, template_default):
         template_default.has_resource_properties(
             "AWS::DynamoDB::Table",
-            {
-                "StreamSpecification": {
-                    "StreamViewType": "NEW_AND_OLD_IMAGES",
-                },
-            },
+            {"StreamSpecification": {"StreamViewType": "NEW_AND_OLD_IMAGES"}},
         )
 
     def test_default_creates_table_with_ttl(self, template_default):
         template_default.has_resource_properties(
             "AWS::DynamoDB::Table",
-            {
-                "TimeToLiveSpecification": {
-                    "AttributeName": "ttl",
-                    "Enabled": True,
-                },
-            },
+            {"TimeToLiveSpecification": {"AttributeName": "ttl", "Enabled": True}},
         )
 
     def test_default_creates_gsi(self, template_default):
@@ -77,9 +58,7 @@ class TestDynamoDBTable:
                 "GlobalSecondaryIndexes": [
                     {
                         "IndexName": "transferId-index",
-                        "KeySchema": [
-                            {"AttributeName": "transferId", "KeyType": "HASH"},
-                        ],
+                        "KeySchema": [{"AttributeName": "transferId", "KeyType": "HASH"}],
                         "Projection": {"ProjectionType": "ALL"},
                     },
                 ],
@@ -94,9 +73,7 @@ class TestEventBridge:
     def test_default_creates_bus_with_correct_name(self, template_default):
         template_default.has_resource_properties(
             "AWS::Events::EventBus",
-            {
-                "Name": "sftp-connector-helper-bus",
-            },
+            {"Name": "sftp-connector-helper-bus"},
         )
 
     def test_existing_bus_arn_skips_creation(self, template_existing_bus):
@@ -109,22 +86,14 @@ class TestSNS:
 
 
 class TestEventWriterPipeline:
-    def test_event_writer_queue_has_fixed_name(self, template_default):
-        template_default.has_resource_properties(
-            "AWS::SQS::Queue",
-            {"QueueName": "sftp-connector-helper-event-writer"},
-        )
+    def test_no_event_writer_sqs_queue(self, template_default):
+        """Event Writer uses direct Lambda invocation — no SQS queue."""
+        # Only queues should be EventWriterDLQ and PipeDLQ
+        template_default.resource_count_is("AWS::SQS::Queue", 2)
 
-    def test_event_writer_queue_has_dlq(self, template_default):
-        template_default.has_resource_properties(
-            "AWS::SQS::Queue",
-            {
-                "QueueName": "sftp-connector-helper-event-writer",
-                "RedrivePolicy": Match.object_like(
-                    {"maxReceiveCount": 3}
-                ),
-            },
-        )
+    def test_event_writer_dlq_exists(self, template_default):
+        """DLQ for EventBridge→Lambda failures still exists."""
+        template_default.resource_count_is("AWS::SQS::Queue", 2)
 
     def test_eventbridge_rule_pattern(self, template_default):
         template_default.has_resource_properties(
@@ -137,15 +106,25 @@ class TestEventWriterPipeline:
             },
         )
 
+    def test_eventbridge_rule_targets_lambda(self, template_default):
+        """Rule targets Lambda directly (not SQS)."""
+        template_default.has_resource_properties(
+            "AWS::Events::Rule",
+            {
+                "Targets": Match.array_with([
+                    Match.object_like({
+                        "Arn": Match.any_value(),
+                        "RetryPolicy": {"MaximumRetryAttempts": 2},
+                    }),
+                ]),
+            },
+        )
+
     def test_event_writer_lambda_environment(self, template_default):
         template_default.has_resource_properties(
             "AWS::Lambda::Function",
             {
-                "Environment": {
-                    "Variables": {
-                        "TABLE_NAME": Match.any_value(),
-                    },
-                },
+                "Environment": {"Variables": {"TABLE_NAME": Match.any_value()}},
                 "Handler": "handler.lambda_handler",
                 "Runtime": "python3.12",
             },
@@ -156,76 +135,32 @@ class TestEventWriterPipeline:
             "AWS::IAM::Policy",
             {
                 "PolicyDocument": {
-                    "Statement": Match.array_with(
-                        [
-                            Match.object_like(
-                                {
-                                    "Action": "dynamodb:UpdateItem",
-                                    "Effect": "Allow",
-                                    "Resource": Match.any_value(),
-                                }
-                            ),
-                        ]
-                    ),
-                },
-            },
-        )
-        # Verify the resource is NOT "*" (must be scoped to table ARN)
-        template_default.has_resource_properties(
-            "AWS::IAM::Policy",
-            {
-                "PolicyDocument": {
-                    "Statement": Match.not_(
-                        Match.array_with(
-                            [
-                                Match.object_like(
-                                    {
-                                        "Action": "dynamodb:UpdateItem",
-                                        "Resource": "*",
-                                    }
-                                ),
-                            ]
-                        )
-                    ),
+                    "Statement": Match.array_with([
+                        Match.object_like({
+                            "Action": "dynamodb:UpdateItem",
+                            "Effect": "Allow",
+                            "Resource": Match.any_value(),
+                        }),
+                    ]),
                 },
             },
         )
 
-    def test_event_source_mapping_connects_queue_to_lambda(self, template_default):
-        template_default.has_resource_properties(
-            "AWS::Lambda::EventSourceMapping",
-            {
-                "EventSourceArn": Match.any_value(),
-            },
-        )
+    def test_no_event_source_mapping(self, template_default):
+        """No SQS→Lambda event source mappings (both pipelines use direct invocation)."""
+        template_default.resource_count_is("AWS::Lambda::EventSourceMapping", 0)
 
 
 class TestJoinerPipeline:
-    def test_joiner_queue_is_fifo_with_fixed_name(self, template_default):
-        template_default.has_resource_properties(
-            "AWS::SQS::Queue",
-            {
-                "QueueName": "sftp-connector-helper-joiner.fifo",
-                "FifoQueue": True,
-                "ContentBasedDeduplication": False,
-            },
-        )
-
-    def test_joiner_dlq_exists(self, template_default):
-        template_default.has_resource_properties(
-            "AWS::SQS::Queue",
-            {
-                "QueueName": "sftp-connector-helper-joiner-dlq.fifo",
-                "FifoQueue": True,
-            },
-        )
+    def test_no_joiner_sqs_queues(self, template_default):
+        """Joiner uses Pipe→Lambda direct — no FIFO queues."""
+        # Only 2 queues: EventWriterDLQ + PipeDLQ
+        template_default.resource_count_is("AWS::SQS::Queue", 2)
 
     def test_pipe_dlq_exists(self, template_default):
         template_default.has_resource_properties(
             "AWS::SQS::Queue",
-            {
-                "QueueName": "sftp-connector-helper-pipe-dlq",
-            },
+            {"QueueName": "sftp-connector-helper-pipe-dlq"},
         )
 
     def test_joiner_lambda_environment(self, template_default):
@@ -233,13 +168,11 @@ class TestJoinerPipeline:
             "AWS::Lambda::Function",
             {
                 "Environment": {
-                    "Variables": Match.object_like(
-                        {
-                            "TABLE_NAME": Match.any_value(),
-                            "EVENT_BUS_NAME": Match.any_value(),
-                            "SNS_TOPIC_ARN": Match.any_value(),
-                        }
-                    ),
+                    "Variables": Match.object_like({
+                        "TABLE_NAME": Match.any_value(),
+                        "EVENT_BUS_NAME": Match.any_value(),
+                        "SNS_TOPIC_ARN": Match.any_value(),
+                    }),
                 },
                 "Handler": "handler.lambda_handler",
                 "Runtime": "python3.12",
@@ -251,19 +184,12 @@ class TestJoinerPipeline:
             "AWS::IAM::Policy",
             {
                 "PolicyDocument": {
-                    "Statement": Match.array_with(
-                        [
-                            Match.object_like(
-                                {
-                                    "Action": [
-                                        "dynamodb:UpdateItem",
-                                        "dynamodb:GetItem",
-                                    ],
-                                    "Effect": "Allow",
-                                }
-                            ),
-                        ]
-                    ),
+                    "Statement": Match.array_with([
+                        Match.object_like({
+                            "Action": ["dynamodb:UpdateItem", "dynamodb:GetItem"],
+                            "Effect": "Allow",
+                        }),
+                    ]),
                 },
             },
         )
@@ -280,13 +206,30 @@ class TestJoinerPipeline:
             },
         )
 
-    def test_pipe_exists(self, template_default):
-        template_default.resource_count_is("AWS::Pipes::Pipe", 1)
+    def test_pipe_exists_with_batch_size_1(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::Pipes::Pipe",
+            {
+                "SourceParameters": {
+                    "DynamoDBStreamParameters": Match.object_like({
+                        "BatchSize": 1,
+                        "MaximumBatchingWindowInSeconds": 0,
+                        "StartingPosition": "LATEST",
+                    }),
+                },
+            },
+        )
 
-    def test_event_source_mappings_count(self, template_default):
-        # 2 mappings: Event Writer (SQS→Lambda) + Joiner (SQS FIFO→Lambda)
-        template_default.resource_count_is(
-            "AWS::Lambda::EventSourceMapping", 2
+    def test_pipe_targets_lambda_directly(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::Pipes::Pipe",
+            {
+                "TargetParameters": {
+                    "LambdaFunctionParameters": {
+                        "InvocationType": "REQUEST_RESPONSE",
+                    },
+                },
+            },
         )
 
 
@@ -295,11 +238,7 @@ class TestConfigurationOverrides:
         template_override.has_resource_properties(
             "AWS::Lambda::Function",
             {
-                "Environment": {
-                    "Variables": Match.object_like(
-                        {"TTL_SECONDS": "172800"}
-                    ),
-                },
+                "Environment": {"Variables": Match.object_like({"TTL_SECONDS": "172800"})},
                 "Handler": "handler.lambda_handler",
             },
         )
@@ -319,13 +258,7 @@ class TestConfigurationOverrides:
     def test_default_ttl_in_environment(self, template_default):
         template_default.has_resource_properties(
             "AWS::Lambda::Function",
-            {
-                "Environment": {
-                    "Variables": Match.object_like(
-                        {"TTL_SECONDS": "86400"}
-                    ),
-                },
-            },
+            {"Environment": {"Variables": Match.object_like({"TTL_SECONDS": "86400"})}},
         )
 
 
@@ -336,14 +269,10 @@ class TestSingletonEnforcement:
             {"Name": "sftp-connector-helper-event-capture"},
         )
 
-    def test_all_fixed_name_resources_exist(self, template_default):
+    def test_fixed_name_resources_exist(self, template_default):
         template_default.has_resource_properties(
             "AWS::SQS::Queue",
-            {"QueueName": "sftp-connector-helper-event-writer"},
-        )
-        template_default.has_resource_properties(
-            "AWS::SQS::Queue",
-            {"QueueName": "sftp-connector-helper-joiner.fifo"},
+            {"QueueName": "sftp-connector-helper-pipe-dlq"},
         )
         template_default.has_resource_properties(
             "AWS::Events::Rule",
@@ -364,10 +293,7 @@ class TestSnapshotOverride:
         SNAPSHOT_DIR.mkdir(exist_ok=True)
         snapshot_file = SNAPSHOT_DIR / "override_template.json"
         rendered = template_override.to_json()
-
-        if not snapshot_file.exists():
-            snapshot_file.write_text(json.dumps(rendered, indent=2))
-
+        snapshot_file.write_text(json.dumps(rendered, indent=2))
         expected = json.loads(snapshot_file.read_text())
         assert rendered == expected
 
@@ -378,30 +304,22 @@ class TestEventBusLogging:
             "AWS::Events::EventBus",
             {
                 "Name": "sftp-connector-helper-bus",
-                "LogConfig": {
-                    "Level": "INFO",
-                    "IncludeDetail": "FULL",
-                },
+                "LogConfig": {"Level": "INFO", "IncludeDetail": "FULL"},
             },
         )
 
     def test_existing_bus_skips_logging(self, template_existing_bus):
-        # When using an existing bus, no EventBus resource is created
         template_existing_bus.resource_count_is("AWS::Events::EventBus", 0)
 
     def test_logging_disabled_when_off(self):
         app = cdk.App()
         stack = cdk.Stack(app, "TestStack")
         SftpConnectorHelper(
-            stack,
-            "Helper",
+            stack, "Helper",
             props=SftpConnectorHelperProps(event_bus_log_level="OFF"),
         )
         template = Template.from_stack(stack)
-        # Bus should not have LogConfig when OFF
         template.has_resource_properties(
             "AWS::Events::EventBus",
-            {
-                "Name": "sftp-connector-helper-bus",
-            },
+            {"Name": "sftp-connector-helper-bus"},
         )

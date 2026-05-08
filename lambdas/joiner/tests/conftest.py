@@ -44,14 +44,9 @@ def mock_sns():
         yield mock_client
 
 
-def make_sqs_event(*stream_records: dict) -> dict:
-    """Build an SQS event wrapping DynamoDB Stream records."""
-    return {
-        "Records": [
-            {"messageId": f"msg-{i}", "body": json.dumps(rec)}
-            for i, rec in enumerate(stream_records)
-        ]
-    }
+def make_pipe_event(*stream_records: dict) -> list:
+    """Build a Pipe direct invocation event (list of DynamoDB Stream records)."""
+    return list(stream_records)
 
 
 def make_stream_record(

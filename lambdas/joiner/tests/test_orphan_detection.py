@@ -9,7 +9,7 @@ import pytest
 
 # conftest fixtures are auto-loaded; import helpers via sys.path
 sys.path.insert(0, os.path.dirname(__file__))
-from conftest import SAMPLE_EVENT_RESULT, SAMPLE_METADATA, make_dynamo_image, make_sqs_event, make_stream_record
+from conftest import SAMPLE_EVENT_RESULT, SAMPLE_METADATA, make_dynamo_image, make_pipe_event, make_stream_record
 
 
 class TestOrphanDetectionUnit:
@@ -148,11 +148,11 @@ class TestOrphanDetectionIntegration:
 
         old_image = make_dynamo_image("job-int-1", metadata=SAMPLE_METADATA)
         stream_record = make_stream_record("REMOVE", "job-int-1", old_image=old_image)
-        event = make_sqs_event(stream_record)
+        event = make_pipe_event(stream_record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result["batchItemFailures"] == []
+        assert result is None
         mock_cloudwatch.put_metric_data.assert_called_once()
 
     def test_remove_with_both_fields_no_orphan(self, mock_table, mock_cloudwatch, mock_sns, monkeypatch):
@@ -164,11 +164,11 @@ class TestOrphanDetectionIntegration:
 
         old_image = make_dynamo_image("job-int-2", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
         stream_record = make_stream_record("REMOVE", "job-int-2", old_image=old_image)
-        event = make_sqs_event(stream_record)
+        event = make_pipe_event(stream_record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result["batchItemFailures"] == []
+        assert result is None
         mock_cloudwatch.put_metric_data.assert_not_called()
 
     def test_remove_without_old_image_no_error(self, mock_table, mock_cloudwatch, mock_sns):
@@ -176,9 +176,9 @@ class TestOrphanDetectionIntegration:
         import handler
 
         stream_record = make_stream_record("REMOVE", "job-int-3")
-        event = make_sqs_event(stream_record)
+        event = make_pipe_event(stream_record)
 
         result = handler.lambda_handler(event, None)
 
-        assert result["batchItemFailures"] == []
+        assert result is None
         mock_cloudwatch.put_metric_data.assert_not_called()

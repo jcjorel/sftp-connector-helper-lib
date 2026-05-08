@@ -192,20 +192,11 @@ def _process_record(stream_record: dict) -> None:
 
 
 def lambda_handler(event, context):
-    """Process SQS records containing DynamoDB Stream records."""
-    batch_item_failures = []
+    """Process DynamoDB Stream records from EventBridge Pipe direct invocation.
 
-    for record in event.get("Records", []):
-        message_id = record.get("messageId", "")
-        try:
-            stream_record = json.loads(record["body"])
-            _process_record(stream_record)
-        except Exception:
-            log_structured(
-                "ERROR",
-                "Failed to process record",
-                message_id=message_id,
-            )
-            batch_item_failures.append({"itemIdentifier": message_id})
+    Pipe sends a list of stream records directly (batch_size=1 typical).
+    """
+    records = event if isinstance(event, list) else [event]
 
-    return {"batchItemFailures": batch_item_failures}
+    for stream_record in records:
+        _process_record(stream_record)

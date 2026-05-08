@@ -40,72 +40,70 @@ def emit_unknown_operation_metric(connector_id: str) -> None:
 
 
 def lambda_handler(event, context):
-    """Process SQS records containing EventBridge events."""
+    """Process EventBridge event directly (invoked as Lambda target)."""
     ttl_seconds = int(os.environ.get("TTL_SECONDS", "86400"))
 
-    for record in event["Records"]:
-        eb_event = json.loads(record["body"])
-        detail_type = eb_event["detail-type"]
-        detail = eb_event["detail"]
-        connector_id = detail.get("connector-id", "unknown")
+    eb_event = event
+    detail_type = eb_event["detail-type"]
+    detail = eb_event["detail"]
+    connector_id = detail.get("connector-id", "unknown")
 
+    try:
+        job_id, operation, is_per_file = get_job_id(detail, detail_type)
+    except UnknownOperationError:
+        log_structured(
+            "WARNING",
+            "Unknown operation type, discarding event",
+            detail=detail,
+            job_id="unknown",
+            operation=detail_type,
+            connector_id=connector_id,
+        )
         try:
-            job_id, operation, is_per_file = get_job_id(detail, detail_type)
-        except UnknownOperationError:
+            emit_unknown_operation_metric(connector_id)
+        except Exception:
             log_structured(
                 "WARNING",
-                "Unknown operation type, discarding event",
-                detail=detail,
-                job_id="unknown",
-                operation=detail_type,
+                "Failed to emit UnknownOperationType metric",
                 connector_id=connector_id,
             )
-            try:
-                emit_unknown_operation_metric(connector_id)
-            except Exception:
-                log_structured(
-                    "WARNING",
-                    "Failed to emit UnknownOperationType metric",
-                    connector_id=connector_id,
-                )
-            continue
+        return
 
-        log_structured(
-            "INFO",
-            "Processing event",
-            detail=detail,
-            job_id=job_id,
-            operation=operation,
-            connector_id=connector_id,
-        )
+    log_structured(
+        "INFO",
+        "Processing event",
+        detail=detail,
+        job_id=job_id,
+        operation=operation,
+        connector_id=connector_id,
+    )
 
-        ttl = int(time.time()) + ttl_seconds
+    ttl = int(time.time()) + ttl_seconds
 
-        # Build UpdateItem params
-        update_expr = "SET eventResult = :e, #t = :t"
-        expr_attr_names = {"#t": "ttl"}
-        expr_attr_values = {
-            ":e": {"S": json.dumps(eb_event)},
-            ":t": {"N": str(ttl)},
-        }
+    update_expr = "SET eventResult = :e, #t = :t"
+    expr_attr_names = {"#t": "ttl"}
+    expr_attr_values = {
+        ":e": {"S": json.dumps(eb_event)},
+        ":t": {"N": str(ttl)},
+    }
 
-        if is_per_file:
-            update_expr += ", transferId = :tid"
-            expr_attr_values[":tid"] = {"S": detail["transfer-id"]}
+    if is_per_file:
+        update_expr += ", transferId = :tid"
+        expr_attr_values[":tid"] = {"S": detail["transfer-id"]}
 
-        dynamodb.update_item(
-            TableName=TABLE_NAME,
-            Key={"jobId": {"S": job_id}},
-            UpdateExpression=update_expr,
-            ExpressionAttributeNames=expr_attr_names,
-            ExpressionAttributeValues=expr_attr_values,
-        )
+    dynamodb.update_item(
+        TableName=TABLE_NAME,
+        Key={"jobId": {"S": job_id}},
+        UpdateExpression=update_expr,
+        ExpressionAttributeNames=expr_attr_names,
+        ExpressionAttributeValues=expr_attr_values,
+    )
 
-        log_structured(
-            "INFO",
-            "Event stored",
-            detail=detail,
-            job_id=job_id,
-            operation=operation,
-            connector_id=connector_id,
-        )
+    log_structured(
+        "INFO",
+        "Event stored",
+        detail=detail,
+        job_id=job_id,
+        operation=operation,
+        connector_id=connector_id,
+    )

@@ -9,7 +9,7 @@ from tests.conftest import (
     SAMPLE_METADATA,
     SAMPLE_EVENT_RESULT,
     make_dynamo_image,
-    make_sqs_event,
+    make_pipe_event,
     make_stream_record,
 )
 
@@ -131,11 +131,11 @@ class TestHandlerMetadataCopyRouting:
             new_img = make_dynamo_image("pf-1", event_result=SAMPLE_EVENT_RESULT, transfer_id="master-1")
             old_img = make_dynamo_image("pf-1")  # no metadata in old
             record = make_stream_record("MODIFY", "pf-1", new_image=new_img, old_image=old_img)
-            event = make_sqs_event(record)
+            event = make_pipe_event(record)
 
             result = handler.lambda_handler(event, None)
 
-            assert result == {"batchItemFailures": []}
+            assert result is None
             mock_events.put_events.assert_not_called()
             mock_tbl.get_item.assert_called_once()
 
@@ -147,11 +147,11 @@ class TestHandlerMetadataCopyRouting:
 
             new_img = make_dynamo_image("master-1", metadata=SAMPLE_METADATA)
             record = make_stream_record("INSERT", "master-1", new_image=new_img)
-            event = make_sqs_event(record)
+            event = make_pipe_event(record)
 
             result = handler.lambda_handler(event, None)
 
-            assert result == {"batchItemFailures": []}
+            assert result is None
             mock_events.put_events.assert_not_called()
             mock_tbl.query.assert_called_once()
 
@@ -163,10 +163,10 @@ class TestHandlerMetadataCopyRouting:
             new_img = make_dynamo_image("pf-1", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
             old_img = make_dynamo_image("pf-1", metadata=SAMPLE_METADATA)
             record = make_stream_record("MODIFY", "pf-1", new_image=new_img, old_image=old_img)
-            event = make_sqs_event(record)
+            event = make_pipe_event(record)
 
             result = handler.lambda_handler(event, None)
 
-            assert result == {"batchItemFailures": []}
+            assert result is None
             mock_tbl.get_item.assert_not_called()
             mock_tbl.query.assert_not_called()

@@ -30,15 +30,8 @@ def mock_cloudwatch():
         yield mock_client
 
 
-def make_sqs_event(*eb_events: dict) -> dict:
-    """Build an SQS event wrapping one or more EventBridge events."""
-    return {
-        "Records": [{"body": json.dumps(ev)} for ev in eb_events]
-    }
-
-
 def make_eb_event(detail_type: str, detail: dict) -> dict:
-    """Build a minimal EventBridge event."""
+    """Build a minimal EventBridge event (passed directly to Lambda)."""
     return {
         "version": "0",
         "source": "aws.transfer",
