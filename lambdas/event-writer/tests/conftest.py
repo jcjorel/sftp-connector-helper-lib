@@ -56,6 +56,8 @@ def file_transfer_master_event():
             "transfer-id": "t-abc123",
             "connector-id": "c-01234567890abcdef",
             "status-code": "COMPLETED",
+            "start-timestamp": "2024-01-24T18:28:07.632388Z",
+            "end-timestamp": "2024-01-24T18:28:07.774898Z",
         },
     )
 
@@ -70,6 +72,8 @@ def file_transfer_per_file_event():
             "file-transfer-id": "ft-xyz789",
             "connector-id": "c-01234567890abcdef",
             "status-code": "COMPLETED",
+            "start-timestamp": "2024-01-24T18:28:07.632388Z",
+            "end-timestamp": "2024-01-24T18:28:07.774898Z",
         },
     )
 
@@ -83,6 +87,8 @@ def directory_listing_event():
             "listing-id": "l-list001",
             "connector-id": "c-01234567890abcdef",
             "status-code": "COMPLETED",
+            "start-timestamp": "2024-01-24T18:28:07.632388Z",
+            "end-timestamp": "2024-01-24T18:28:07.774898Z",
         },
     )
 
@@ -96,6 +102,8 @@ def remote_move_event():
             "move-id": "m-move001",
             "connector-id": "c-01234567890abcdef",
             "status-code": "COMPLETED",
+            "start-timestamp": "2024-01-24T18:28:07.632388Z",
+            "end-timestamp": "2024-01-24T18:28:07.774898Z",
         },
     )
 
@@ -109,5 +117,7 @@ def remote_delete_event():
             "delete-id": "d-del001",
             "connector-id": "c-01234567890abcdef",
             "status-code": "COMPLETED",
+            "start-timestamp": "2024-01-24T18:28:07.632388Z",
+            "end-timestamp": "2024-01-24T18:28:07.774898Z",
         },
     )

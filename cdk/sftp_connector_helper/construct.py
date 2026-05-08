@@ -171,6 +171,14 @@ class SftpConnectorHelper(Construct):
         )
         rule.add_target(targets.SqsQueue(event_writer_queue))
 
+        event_writer_log_group = logs.LogGroup(
+            self,
+            "EventWriterLogGroup",
+            log_group_name="/aws/lambda/sftp-connector-helper-event-writer",
+            retention=logs.RetentionDays.ONE_WEEK,
+            removal_policy=cdk.RemovalPolicy.DESTROY,
+        )
+
         event_writer_lambda = _lambda.Function(
             self,
             "EventWriterFunction",
@@ -185,6 +193,7 @@ class SftpConnectorHelper(Construct):
             },
             memory_size=props.event_writer_memory,
             timeout=props.event_writer_timeout,
+            log_group=event_writer_log_group,
         )
 
         event_writer_lambda.add_event_source(
@@ -273,6 +282,14 @@ class SftpConnectorHelper(Construct):
 
         pipe.node.add_dependency(pipe_role)
 
+        joiner_log_group = logs.LogGroup(
+            self,
+            "JoinerLogGroup",
+            log_group_name="/aws/lambda/sftp-connector-helper-joiner",
+            retention=logs.RetentionDays.ONE_WEEK,
+            removal_policy=cdk.RemovalPolicy.DESTROY,
+        )
+
         joiner_lambda = _lambda.Function(
             self,
             "JoinerFunction",
@@ -289,6 +306,7 @@ class SftpConnectorHelper(Construct):
             },
             memory_size=props.joiner_memory,
             timeout=props.joiner_timeout,
+            log_group=joiner_log_group,
         )
 
         joiner_lambda.add_to_role_policy(

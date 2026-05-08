@@ -151,6 +151,15 @@
         ]
       }
     },
+    "HelperEventWriterLogGroupCC421DCA": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sftp-connector-helper-event-writer",
+        "RetentionInDays": 7
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
     "HelperEventWriterFunctionServiceRole6A1CD748": {
       "Type": "AWS::IAM::Role",
       "Properties": {
@@ -231,7 +240,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "349720800a04350301afa262eae98a3905337bd8c7f9acf5f3877dc307489310.zip"
+          "S3Key": "616554ae220596955ef2cb56ad47b19f98c9e3fe2bb20c7354e97e6000d6ffca.zip"
         },
         "Environment": {
           "Variables": {
@@ -242,6 +251,11 @@
           }
         },
         "Handler": "handler.lambda_handler",
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "HelperEventWriterLogGroupCC421DCA"
+          }
+        },
         "MemorySize": 256,
         "Role": {
           "Fn::GetAtt": [
@@ -433,6 +447,15 @@
         "HelperPipeRoleFBECD364"
       ]
     },
+    "HelperJoinerLogGroup36E0D152": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sftp-connector-helper-joiner",
+        "RetentionInDays": 7
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
     "HelperJoinerFunctionServiceRole204AA3FE": {
       "Type": "AWS::IAM::Role",
       "Properties": {
@@ -561,7 +584,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "c5a6967c3bfa41517cb144f88b735ecc2947902dc55f3320e65cd30369809693.zip"
+          "S3Key": "ab78926134763da9a6e72891248358c43defa2c4cc397b220a4d8332ff794af1.zip"
         },
         "Environment": {
           "Variables": {
@@ -578,6 +601,11 @@
           }
         },
         "Handler": "handler.lambda_handler",
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "HelperJoinerLogGroup36E0D152"
+          }
+        },
         "MemorySize": 256,
         "Role": {
           "Fn::GetAtt": [

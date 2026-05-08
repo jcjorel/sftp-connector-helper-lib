@@ -28,11 +28,13 @@ test-java: check-tools
 
 build-lambdas: check-tools
 	@set -e; for dir in lambdas/*/; do \
+		[ "$${dir}" = "lambdas/shared/" ] && continue; \
 		cd $$dir && \
 		rm -rf dist/ && \
 		uv export --format requirements-txt --no-dev --no-emit-project -o requirements.txt && \
 		pip install --target dist/ -r requirements.txt -q && \
 		cp *.py dist/ && \
+		cp ../shared/*.py dist/ && \
 		cd ../..; \
 	done
 
@@ -45,16 +47,23 @@ TABLE_NAME := sftp-connector-helper
 
 deploy: check-deploy-env build-lambdas
 	@CONTEXT_ARG=""; \
+	TABLE_IN_STACK="false"; \
 	STACK_STATUS=$$(aws cloudformation describe-stacks --stack-name $(STACK_NAME) \
 		--profile $(AWS_PROFILE) --region $(AWS_REGION) --query 'Stacks[0].StackStatus' --output text 2>/dev/null); \
-	if [ -z "$$STACK_STATUS" ] || echo "$$STACK_STATUS" | grep -qE '(ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_COMPLETE|REVIEW_IN_PROGRESS)'; then \
+	if [ -n "$$STACK_STATUS" ] && ! echo "$$STACK_STATUS" | grep -qE '(ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_COMPLETE|REVIEW_IN_PROGRESS)'; then \
+		TABLE_IN_STACK=$$(aws cloudformation list-stack-resources --stack-name $(STACK_NAME) \
+			--profile $(AWS_PROFILE) --region $(AWS_REGION) \
+			--query "StackResourceSummaries[?ResourceType=='AWS::DynamoDB::Table'] | length(@)" --output text 2>/dev/null); \
+		if [ "$$TABLE_IN_STACK" = "0" ]; then TABLE_IN_STACK="false"; else TABLE_IN_STACK="true"; fi; \
+	fi; \
+	if [ -z "$$STACK_STATUS" ] || echo "$$STACK_STATUS" | grep -qE '(ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_COMPLETE|REVIEW_IN_PROGRESS)' || [ "$$TABLE_IN_STACK" = "false" ]; then \
 		TABLE_DESC=$$(aws dynamodb describe-table --table-name $(TABLE_NAME) \
 			--profile $(AWS_PROFILE) --region $(AWS_REGION) --output json 2>/dev/null); \
 		if [ -n "$$TABLE_DESC" ]; then \
 			TABLE_ARN=$$(echo "$$TABLE_DESC" | python3 -c "import sys,json;print(json.load(sys.stdin)['Table']['TableArn'])"); \
 			STREAM_ARN=$$(echo "$$TABLE_DESC" | python3 -c "import sys,json;print(json.load(sys.stdin)['Table'].get('LatestStreamArn',''))"); \
 			if [ -n "$$TABLE_ARN" ] && [ "$$TABLE_ARN" != "None" ] && [ -n "$$STREAM_ARN" ]; then \
-				echo "ℹ️  Stack not found but DynamoDB table '$(TABLE_NAME)' exists. Reusing existing table."; \
+				echo "ℹ️  DynamoDB table '$(TABLE_NAME)' exists outside stack. Reusing existing table."; \
 				CONTEXT_ARG="--context existing_table_arn=$$TABLE_ARN --context existing_table_stream_arn=$$STREAM_ARN"; \
 			fi; \
 		fi; \

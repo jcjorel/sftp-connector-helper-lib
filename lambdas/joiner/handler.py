@@ -49,6 +49,15 @@ def _extract_connector_id(event_result_str: str) -> str:
         return "unknown"
 
 
+def _extract_detail(event_result_str: str) -> dict | None:
+    """Extract detail dict from stored event for timing info."""
+    try:
+        parsed = json.loads(event_result_str)
+        return parsed.get("detail")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return None
+
+
 def _emit_invalid_metadata_metric(connector_id: str) -> None:
     """Emit InvalidMetadata metric with and without ConnectorId dimension."""
     try:
@@ -156,12 +165,14 @@ def _process_record(stream_record: dict) -> None:
     metadata_str = new_image["metadata"]
     event_result_str = new_image["eventResult"]
     connector_id = _extract_connector_id(event_result_str)
+    event_detail = _extract_detail(event_result_str)
 
     # Metadata validation
     if not validate_metadata(metadata_str):
         log_structured(
             "ERROR",
             "Invalid metadata, not a JSON object",
+            detail=event_detail,
             job_id=job_id,
             connector_id=connector_id,
             metadata_preview=metadata_str[:200],
@@ -173,6 +184,7 @@ def _process_record(stream_record: dict) -> None:
     log_structured(
         "INFO",
         "Record complete, publishing enriched event",
+        detail=event_detail,
         job_id=job_id,
         connector_id=connector_id,
     )

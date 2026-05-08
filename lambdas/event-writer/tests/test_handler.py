@@ -145,6 +145,22 @@ class TestStructuredLogging:
             assert "operation" in entry
             assert "connector_id" in entry
 
+    def test_log_contains_timing_fields(self, mock_dynamodb, file_transfer_master_event, caplog):
+        import logging
+        from handler import lambda_handler
+
+        sqs_event = make_sqs_event(file_transfer_master_event)
+
+        with caplog.at_level(logging.INFO):
+            lambda_handler(sqs_event, None)
+
+        log_entries = [json.loads(r.message) for r in caplog.records if r.message.startswith("{")]
+        assert len(log_entries) >= 1
+
+        for entry in log_entries:
+            assert entry["start_timestamp"] == "2024-01-24T18:28:07.632388Z"
+            assert entry["end_timestamp"] == "2024-01-24T18:28:07.774898Z"
+
 
 class TestUnknownOperationType:
     """Test unknown operation type handling (Story 2-2)."""

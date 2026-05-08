@@ -30,7 +30,7 @@ class TestSuccessfulPublish:
         assert result == {"batchItemFailures": []}
         mock_events.put_events.assert_called_once()
         call_args = mock_events.put_events.call_args[1]["Entries"][0]
-        assert call_args["Source"] == "aws.transfer"
+        assert call_args["Source"] == "custom.sftp-connector-helper"
         assert call_args["DetailType"] == "SFTP Connector Directory Listing Completed"
         assert call_args["EventBusName"] == "test-bus"
 
@@ -65,7 +65,7 @@ class TestSuccessfulPublish:
         handler.lambda_handler(event, None)
 
         call_args = mock_events.put_events.call_args[1]["Entries"][0]
-        assert call_args["Source"] == "aws.transfer"
+        assert call_args["Source"] == "custom.sftp-connector-helper"
         assert call_args["DetailType"] == "SFTP Connector Directory Listing Completed"
 
 
@@ -218,3 +218,26 @@ class TestMetadataCopyNoRegression:
         mock_events.put_events.assert_not_called()
         mock_table.get_item.assert_not_called()
         mock_table.query.assert_not_called()
+
+
+class TestTimingInLogs:
+    """Verify start_timestamp and end_timestamp appear in structured logs."""
+
+    def test_publish_log_contains_timing(self, mock_events, mock_cloudwatch, caplog):
+        """Log at publish time includes start_timestamp and end_timestamp."""
+        import logging
+        import handler
+
+        new_img = make_dynamo_image("job-t1", metadata=SAMPLE_METADATA, event_result=SAMPLE_EVENT_RESULT)
+        old_img = make_dynamo_image("job-t1", event_result=SAMPLE_EVENT_RESULT)
+        record = make_stream_record("MODIFY", "job-t1", new_image=new_img, old_image=old_img)
+        event = make_sqs_event(record)
+
+        with caplog.at_level(logging.INFO):
+            handler.lambda_handler(event, None)
+
+        log_entries = [json.loads(r.message) for r in caplog.records if r.message.startswith("{")]
+        publish_entry = [e for e in log_entries if e.get("message") == "Record complete, publishing enriched event"]
+        assert len(publish_entry) == 1
+        assert publish_entry[0]["start_timestamp"] == "2024-01-24T18:28:07.632388Z"
+        assert publish_entry[0]["end_timestamp"] == "2024-01-24T18:28:07.774898Z"

@@ -349,6 +349,14 @@ class TestSingletonEnforcement:
             "AWS::Events::Rule",
             {"Name": "sftp-connector-helper-event-capture"},
         )
+        template_default.has_resource_properties(
+            "AWS::Logs::LogGroup",
+            {"LogGroupName": "/aws/lambda/sftp-connector-helper-event-writer"},
+        )
+        template_default.has_resource_properties(
+            "AWS::Logs::LogGroup",
+            {"LogGroupName": "/aws/lambda/sftp-connector-helper-joiner"},
+        )
 
 
 class TestSnapshotOverride:

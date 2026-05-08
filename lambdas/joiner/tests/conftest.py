@@ -102,6 +102,8 @@ SAMPLE_EVENT_RESULT = json.dumps({
         "connector-id": "c-01234",
         "listing-id": "listing-abc-123",
         "status": "COMPLETED",
+        "start-timestamp": "2024-01-24T18:28:07.632388Z",
+        "end-timestamp": "2024-01-24T18:28:07.774898Z",
     },
 })
 

@@ -8,6 +8,7 @@ import time
 import boto3
 
 from field_mapping import UnknownOperationError, get_job_id
+from log_util import log_structured
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -16,13 +17,6 @@ TABLE_NAME = os.environ.get("TABLE_NAME", "sftp-connector-helper")
 
 dynamodb = boto3.client("dynamodb")
 cloudwatch = boto3.client("cloudwatch")
-
-
-def log_structured(level: str, message: str, **kwargs) -> None:
-    """Emit structured JSON log line with mandatory fields."""
-    entry = {"level": level, "message": message}
-    entry.update(kwargs)
-    logger.log(getattr(logging, level), json.dumps(entry))
 
 
 def emit_unknown_operation_metric(connector_id: str) -> None:
@@ -61,6 +55,7 @@ def lambda_handler(event, context):
             log_structured(
                 "WARNING",
                 "Unknown operation type, discarding event",
+                detail=detail,
                 job_id="unknown",
                 operation=detail_type,
                 connector_id=connector_id,
@@ -78,6 +73,7 @@ def lambda_handler(event, context):
         log_structured(
             "INFO",
             "Processing event",
+            detail=detail,
             job_id=job_id,
             operation=operation,
             connector_id=connector_id,
@@ -108,6 +104,7 @@ def lambda_handler(event, context):
         log_structured(
             "INFO",
             "Event stored",
+            detail=detail,
             job_id=job_id,
             operation=operation,
             connector_id=connector_id,
