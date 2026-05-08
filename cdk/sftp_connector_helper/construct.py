@@ -168,7 +168,12 @@ class SftpConnectorHelper(Construct):
             lambda_event_sources.SqsEventSource(event_writer_queue)
         )
 
-        self._table.grant(event_writer_lambda, "dynamodb:UpdateItem")
+        event_writer_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:UpdateItem"],
+                resources=[self._table.table_arn],
+            )
+        )
 
         # Joiner Pipeline (only when construct owns the table — stream ARN required)
         if not props.existing_table_arn:
@@ -205,7 +210,17 @@ class SftpConnectorHelper(Construct):
                 "PipeRole",
                 assumed_by=iam.ServicePrincipal("pipes.amazonaws.com"),
             )
-            self._table.grant_stream_read(pipe_role)
+            pipe_role.add_to_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "dynamodb:DescribeStream",
+                        "dynamodb:GetRecords",
+                        "dynamodb:GetShardIterator",
+                        "dynamodb:ListStreams",
+                    ],
+                    resources=[self._table.table_stream_arn],
+                )
+            )
             joiner_queue.grant_send_messages(pipe_role)
             pipe_dlq.grant_send_messages(pipe_role)
 
@@ -256,7 +271,12 @@ class SftpConnectorHelper(Construct):
                 timeout=props.joiner_timeout,
             )
 
-            self._table.grant(joiner_lambda, "dynamodb:UpdateItem", "dynamodb:GetItem")
+            joiner_lambda.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["dynamodb:UpdateItem", "dynamodb:GetItem"],
+                    resources=[self._table.table_arn],
+                )
+            )
             joiner_lambda.add_to_role_policy(
                 iam.PolicyStatement(
                     actions=["dynamodb:Query"],
