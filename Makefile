@@ -21,5 +21,8 @@ deploy: build-lambdas
 
 test: test-java
 
+test-integration:
+	cd tests/integration && uv run pytest -v
+
 clean:
 	cd helpers/java && mvn clean -q
