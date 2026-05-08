@@ -50,17 +50,35 @@ graph LR
 - AWS CDK v2 installed (`npm install -g aws-cdk`)
 - Python 3.12+ with `uv` package manager
 - Java 17+ with Maven
-- AWS credentials configured
+- AWS CLI v2 configured with a named profile
 
 ### Deploy
 
+All deployment commands require two explicit parameters:
+- **`AWS_PROFILE`** — the AWS CLI profile name to use for credentials
+- **`AWS_REGION`** — the target AWS region (e.g., `eu-central-1`)
+
+**First-time setup** — bootstrap CDK in your target region (one-time per account/region):
+
 ```bash
-git clone <this-repo>
-cd sftp-connector-helper-lib
-make deploy
+make bootstrap AWS_PROFILE=my-profile AWS_REGION=eu-central-1
 ```
 
-This builds the Lambda packages and runs `cdk deploy`, creating all infrastructure in your account.
+**Deploy the stack:**
+
+```bash
+make deploy AWS_PROFILE=my-profile AWS_REGION=eu-central-1
+```
+
+This builds the Lambda packages, activates the CDK virtual environment, and runs `cdk deploy` targeting the specified account and region.
+
+**Tear down:**
+
+```bash
+make destroy AWS_PROFILE=my-profile AWS_REGION=eu-central-1
+```
+
+> **Note:** The Makefile validates that required tools (`cdk`, `uv`, `mvn`, `aws`) are installed and that credentials are valid before proceeding.
 
 ### First API Call (Java)
 
@@ -240,7 +258,7 @@ Costs are dominated by DynamoDB writes and Lambda invocations. EventBridge Pipes
 ### 1. Deploy Infrastructure
 
 ```bash
-make deploy
+make deploy AWS_PROFILE=my-profile AWS_REGION=eu-central-1
 ```
 
 ### 2. Call from Java Application
@@ -347,7 +365,9 @@ EventBridge Pipe failures (DynamoDB Streams → SQS FIFO) land here. To replay:
 | Command | Description |
 |---------|-------------|
 | `make build` | Build Java library + Lambda packages |
-| `make deploy` | Build Lambdas + CDK deploy |
+| `make deploy AWS_PROFILE=x AWS_REGION=y` | Build Lambdas + CDK deploy to specified region |
+| `make bootstrap AWS_PROFILE=x AWS_REGION=y` | Bootstrap CDK in target region (one-time) |
+| `make destroy AWS_PROFILE=x AWS_REGION=y` | Tear down the deployed stack |
 | `make test` | Run Java unit tests |
 | `make test-integration` | Run integration tests (requires deployed stack) |
 | `make clean` | Clean Java build artifacts |
