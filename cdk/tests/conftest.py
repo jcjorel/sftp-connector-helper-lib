@@ -21,7 +21,8 @@ def template_existing_table():
         stack,
         "Helper",
         props=SftpConnectorHelperProps(
-            existing_table_arn="arn:aws:dynamodb:us-east-1:123456789012:table/my-table"
+            existing_table_arn="arn:aws:dynamodb:us-east-1:123456789012:table/my-table",
+            existing_table_stream_arn="arn:aws:dynamodb:us-east-1:123456789012:table/my-table/stream/2026-01-01T00:00:00.000",
         ),
     )
     return Template.from_stack(stack)

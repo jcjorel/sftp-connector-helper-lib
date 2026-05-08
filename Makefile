@@ -48,11 +48,15 @@ deploy: check-deploy-env build-lambdas
 	STACK_STATUS=$$(aws cloudformation describe-stacks --stack-name $(STACK_NAME) \
 		--profile $(AWS_PROFILE) --region $(AWS_REGION) --query 'Stacks[0].StackStatus' --output text 2>/dev/null); \
 	if [ -z "$$STACK_STATUS" ] || echo "$$STACK_STATUS" | grep -qE '(ROLLBACK_COMPLETE|CREATE_FAILED|DELETE_COMPLETE|REVIEW_IN_PROGRESS)'; then \
-		TABLE_ARN=$$(aws dynamodb describe-table --table-name $(TABLE_NAME) \
-			--profile $(AWS_PROFILE) --region $(AWS_REGION) --query 'Table.TableArn' --output text 2>/dev/null); \
-		if [ -n "$$TABLE_ARN" ] && [ "$$TABLE_ARN" != "None" ]; then \
-			echo "ℹ️  Stack not found but DynamoDB table '$(TABLE_NAME)' exists. Reusing existing table."; \
-			CONTEXT_ARG="--context existing_table_arn=$$TABLE_ARN"; \
+		TABLE_DESC=$$(aws dynamodb describe-table --table-name $(TABLE_NAME) \
+			--profile $(AWS_PROFILE) --region $(AWS_REGION) --output json 2>/dev/null); \
+		if [ -n "$$TABLE_DESC" ]; then \
+			TABLE_ARN=$$(echo "$$TABLE_DESC" | python3 -c "import sys,json;print(json.load(sys.stdin)['Table']['TableArn'])"); \
+			STREAM_ARN=$$(echo "$$TABLE_DESC" | python3 -c "import sys,json;print(json.load(sys.stdin)['Table'].get('LatestStreamArn',''))"); \
+			if [ -n "$$TABLE_ARN" ] && [ "$$TABLE_ARN" != "None" ] && [ -n "$$STREAM_ARN" ]; then \
+				echo "ℹ️  Stack not found but DynamoDB table '$(TABLE_NAME)' exists. Reusing existing table."; \
+				CONTEXT_ARG="--context existing_table_arn=$$TABLE_ARN --context existing_table_stream_arn=$$STREAM_ARN"; \
+			fi; \
 		fi; \
 	fi; \
 	cd cdk && source .venv/bin/activate && \

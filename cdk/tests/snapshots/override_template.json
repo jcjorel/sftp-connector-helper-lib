@@ -202,28 +202,12 @@
             {
               "Action": "dynamodb:UpdateItem",
               "Effect": "Allow",
-              "Resource": [
-                {
-                  "Fn::GetAtt": [
-                    "HelperTable7DF2E3E7",
-                    "Arn"
-                  ]
-                },
-                {
-                  "Fn::Join": [
-                    "",
-                    [
-                      {
-                        "Fn::GetAtt": [
-                          "HelperTable7DF2E3E7",
-                          "Arn"
-                        ]
-                      },
-                      "/index/*"
-                    ]
-                  ]
-                }
-              ]
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HelperTable7DF2E3E7",
+                  "Arn"
+                ]
+              }
             }
           ],
           "Version": "2012-10-17"
@@ -243,7 +227,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "a428a307b6fa08605d7490f95bb6ed86419348f7d03cad5203cf7d2d3bc520ce.zip"
+          "S3Key": "890dd24933053615f6121df8f6c547f0d6e564965d4efa8f0f19a320d34b9b93.zip"
         },
         "Environment": {
           "Variables": {
@@ -343,15 +327,11 @@
         "PolicyDocument": {
           "Statement": [
             {
-              "Action": "dynamodb:ListStreams",
-              "Effect": "Allow",
-              "Resource": "*"
-            },
-            {
               "Action": [
                 "dynamodb:DescribeStream",
                 "dynamodb:GetRecords",
-                "dynamodb:GetShardIterator"
+                "dynamodb:GetShardIterator",
+                "dynamodb:ListStreams"
               ],
               "Effect": "Allow",
               "Resource": {
@@ -491,28 +471,12 @@
                 "dynamodb:GetItem"
               ],
               "Effect": "Allow",
-              "Resource": [
-                {
-                  "Fn::GetAtt": [
-                    "HelperTable7DF2E3E7",
-                    "Arn"
-                  ]
-                },
-                {
-                  "Fn::Join": [
-                    "",
-                    [
-                      {
-                        "Fn::GetAtt": [
-                          "HelperTable7DF2E3E7",
-                          "Arn"
-                        ]
-                      },
-                      "/index/*"
-                    ]
-                  ]
-                }
-              ]
+              "Resource": {
+                "Fn::GetAtt": [
+                  "HelperTable7DF2E3E7",
+                  "Arn"
+                ]
+              }
             },
             {
               "Action": "dynamodb:Query",
@@ -593,7 +557,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "e68bf66b3b7bd5585c0f8fb03c6c4060a69c00f07ce02172343ea7bd2901bd33.zip"
+          "S3Key": "e5404d1fce68c8016f36571a6d35d74e3bd5d554d68b0d77aaa05aede27a64e1.zip"
         },
         "Environment": {
           "Variables": {
