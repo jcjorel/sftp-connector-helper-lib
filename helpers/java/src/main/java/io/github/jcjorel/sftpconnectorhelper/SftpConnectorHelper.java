@@ -23,6 +23,25 @@ import java.util.Map;
 /**
  * Helper library for AWS Transfer Family SFTP Connector operations
  * with automatic metadata correlation via DynamoDB.
+ *
+ * <p>Wraps each Transfer Family SDK call (StartFileTransfer, StartDirectoryListing,
+ * StartRemoteMove, StartRemoteDelete) to first execute the operation, then write
+ * caller-supplied business metadata to DynamoDB using a conditional {@code UpdateItem}.
+ * Downstream, the Joiner Lambda joins this metadata with Transfer Family events and
+ * publishes enriched events to a dedicated EventBridge bus.</p>
+ *
+ * <p>Implements {@link AutoCloseable} — use try-with-resources or call {@link #close()}
+ * to release the underlying SDK clients when done.</p>
+ *
+ * <h2>Usage</h2>
+ * <pre>{@code
+ * try (SftpConnectorHelper helper = SftpConnectorHelper.builder().build()) {
+ *     var result = helper.startFileTransfer(request, "{\"orderId\":\"ORD-001\"}");
+ * }
+ * }</pre>
+ *
+ * @see SftpConnectorHelperBuilder
+ * @see SftpOperationResult
  */
 public final class SftpConnectorHelper implements AutoCloseable {
 
@@ -41,26 +60,36 @@ public final class SftpConnectorHelper implements AutoCloseable {
         this.transferClient = transferClient;
     }
 
+    /**
+     * Creates a new builder for configuring and constructing an {@link SftpConnectorHelper} instance.
+     *
+     * @return a new builder instance
+     */
     public static SftpConnectorHelperBuilder builder() {
         return new SftpConnectorHelperBuilder();
     }
 
+    /** Returns the DynamoDB table name used for metadata storage. */
     public String getTableName() {
         return tableName;
     }
 
+    /** Returns the TTL duration applied to DynamoDB records. */
     public Duration getTtlDuration() {
         return ttlDuration;
     }
 
+    /** Returns the DynamoDB client used by this helper. */
     public DynamoDbClient getDynamoDbClient() {
         return dynamoDbClient;
     }
 
+    /** Returns the Transfer Family client used by this helper. */
     public TransferClient getTransferClient() {
         return transferClient;
     }
 
+    /** Closes the underlying DynamoDB and Transfer Family SDK clients. */
     @Override
     public void close() {
         dynamoDbClient.close();

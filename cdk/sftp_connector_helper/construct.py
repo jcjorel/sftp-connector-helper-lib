@@ -21,6 +21,22 @@ from constructs import Construct
 
 @dataclass
 class SftpConnectorHelperProps:
+    """Configuration properties for the SftpConnectorHelper CDK construct.
+
+    Attributes:
+        existing_table_arn: ARN of an existing DynamoDB table to use instead of creating one.
+            When provided, the Joiner pipeline (Pipe + Lambda) is not created since
+            DynamoDB Streams access requires table ownership. Default: None (creates table).
+        existing_bus_arn: ARN of an existing EventBridge bus to use instead of creating one.
+            Default: None (creates bus named 'sftp-connector-helper-bus').
+        ttl_duration: TTL duration for DynamoDB records, passed to Lambdas as TTL_SECONDS
+            environment variable. Default: 1 day.
+        event_writer_memory: Memory allocation in MB for the Event Writer Lambda. Default: 256.
+        event_writer_timeout: Timeout for the Event Writer Lambda. Default: 30 seconds.
+        joiner_memory: Memory allocation in MB for the Joiner Lambda. Default: 256.
+        joiner_timeout: Timeout for the Joiner Lambda. Default: 30 seconds.
+    """
+
     existing_table_arn: Optional[str] = None
     existing_bus_arn: Optional[str] = None
     ttl_duration: cdk.Duration = cdk.Duration.days(1)  # Passed to Joiner Lambda env var in Story 3-3; not used by CDK infra directly
@@ -31,6 +47,25 @@ class SftpConnectorHelperProps:
 
 
 class SftpConnectorHelper(Construct):
+    """CDK construct that deploys the SFTP Connector Helper framework.
+
+    Creates the full metadata correlation pipeline:
+    - DynamoDB table with Streams enabled (or imports existing)
+    - Dedicated EventBridge bus (or imports existing)
+    - Event Writer pipeline: EventBridge rule → SQS → Lambda → DynamoDB
+    - Joiner pipeline: DynamoDB Streams → EventBridge Pipe → SQS FIFO → Lambda → EventBridge bus
+    - SNS topic for orphan alerts
+    - CloudWatch alarm on Pipe IteratorAge
+
+    Singleton enforcement via fixed resource names prevents duplicate deployments
+    in the same account/region. See cdk/README.md for details.
+
+    Properties:
+        table: The DynamoDB table (created or imported).
+        event_bus: The dedicated EventBridge bus (created or imported).
+        orphan_topic: The SNS topic for orphan alert notifications.
+    """
+
     def __init__(
         self,
         scope: Construct,

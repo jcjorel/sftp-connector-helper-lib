@@ -6,9 +6,13 @@ import java.util.Map;
 /**
  * Result of filtering a directory listing S3 output by regex patterns.
  *
- * @param files filtered file entries (each containing at least "filePath")
- * @param paths filtered path entries (each containing at least "path")
- * @param truncated original truncated flag from the S3 listing output (string "true"/"false")
+ * <p>Returned by {@link DirectoryListingFilter#filter(String, String, String)}.
+ * Contains the filtered file and path entries, plus the original truncation flag
+ * from the S3 listing output.</p>
+ *
+ * @param files     filtered file entries (each map contains at least a {@code "filePath"} key)
+ * @param paths     filtered path entries (each map contains at least a {@code "path"} key)
+ * @param truncated original truncated flag from the S3 listing output ({@code "true"} or {@code "false"})
  */
 public record DirectoryListingResult(
         List<Map<String, Object>> files,

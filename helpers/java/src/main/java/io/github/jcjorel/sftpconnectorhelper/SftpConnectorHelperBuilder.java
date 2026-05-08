@@ -7,6 +7,22 @@ import java.time.Duration;
 
 /**
  * Builder for {@link SftpConnectorHelper}.
+ *
+ * <p>All parameters are optional. When omitted, sensible defaults are used:
+ * <ul>
+ *   <li>{@code tableName} — defaults to {@code "sftp-connector-helper"}</li>
+ *   <li>{@code ttlDuration} — defaults to 24 hours</li>
+ *   <li>{@code dynamoDbClient} — creates a default client using the standard credential chain</li>
+ *   <li>{@code transferClient} — creates a default client using the standard credential chain</li>
+ * </ul>
+ *
+ * <h2>Usage</h2>
+ * <pre>{@code
+ * SftpConnectorHelper helper = SftpConnectorHelper.builder()
+ *     .tableName("my-table")
+ *     .ttlDuration(Duration.ofHours(12))
+ *     .build();
+ * }</pre>
  */
 public final class SftpConnectorHelperBuilder {
 
@@ -17,26 +33,56 @@ public final class SftpConnectorHelperBuilder {
 
     SftpConnectorHelperBuilder() {}
 
+    /**
+     * Sets the DynamoDB table name for metadata storage.
+     *
+     * @param tableName the table name (default: {@code "sftp-connector-helper"})
+     * @return this builder
+     */
     public SftpConnectorHelperBuilder tableName(String tableName) {
         this.tableName = tableName;
         return this;
     }
 
+    /**
+     * Sets the TTL duration for DynamoDB records.
+     *
+     * @param ttlDuration the TTL duration (default: 24 hours); must be positive
+     * @return this builder
+     */
     public SftpConnectorHelperBuilder ttlDuration(Duration ttlDuration) {
         this.ttlDuration = ttlDuration;
         return this;
     }
 
+    /**
+     * Sets a custom DynamoDB client.
+     *
+     * @param dynamoDbClient the DynamoDB client to use (default: creates a new client)
+     * @return this builder
+     */
     public SftpConnectorHelperBuilder dynamoDbClient(DynamoDbClient dynamoDbClient) {
         this.dynamoDbClient = dynamoDbClient;
         return this;
     }
 
+    /**
+     * Sets a custom Transfer Family client.
+     *
+     * @param transferClient the Transfer client to use (default: creates a new client)
+     * @return this builder
+     */
     public SftpConnectorHelperBuilder transferClient(TransferClient transferClient) {
         this.transferClient = transferClient;
         return this;
     }
 
+    /**
+     * Builds and returns a configured {@link SftpConnectorHelper} instance.
+     *
+     * @return a new helper instance
+     * @throws IllegalArgumentException if tableName is blank or ttlDuration is non-positive
+     */
     public SftpConnectorHelper build() {
         String resolvedTableName = tableName != null ? tableName : SftpConnectorHelper.DEFAULT_TABLE_NAME;
         if (resolvedTableName.isBlank()) {
