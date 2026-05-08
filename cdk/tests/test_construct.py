@@ -362,3 +362,38 @@ class TestSnapshotOverride:
 
         expected = json.loads(snapshot_file.read_text())
         assert rendered == expected
+
+
+class TestEventBusLogging:
+    def test_default_bus_has_log_config(self, template_default):
+        template_default.has_resource_properties(
+            "AWS::Events::EventBus",
+            {
+                "Name": "sftp-connector-helper-bus",
+                "LogConfig": {
+                    "Level": "INFO",
+                    "IncludeDetail": "FULL",
+                },
+            },
+        )
+
+    def test_existing_bus_skips_logging(self, template_existing_bus):
+        # When using an existing bus, no EventBus resource is created
+        template_existing_bus.resource_count_is("AWS::Events::EventBus", 0)
+
+    def test_logging_disabled_when_off(self):
+        app = cdk.App()
+        stack = cdk.Stack(app, "TestStack")
+        SftpConnectorHelper(
+            stack,
+            "Helper",
+            props=SftpConnectorHelperProps(event_bus_log_level="OFF"),
+        )
+        template = Template.from_stack(stack)
+        # Bus should not have LogConfig when OFF
+        template.has_resource_properties(
+            "AWS::Events::EventBus",
+            {
+                "Name": "sftp-connector-helper-bus",
+            },
+        )

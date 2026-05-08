@@ -63,13 +63,23 @@ def publish_enriched_event(
     metadata = json.loads(metadata_str)
     detail["_helper_metadata"] = metadata
 
-    events_client.put_events(
+    response = events_client.put_events(
         Entries=[
             {
-                "Source": source,
+                "Source": "custom.sftp-connector-helper",
                 "DetailType": detail_type,
                 "EventBusName": bus_name,
                 "Detail": json.dumps(detail),
             }
         ]
     )
+
+    if response.get("FailedEntryCount", 0) > 0:
+        error_entry = response["Entries"][0]
+        log_structured(
+            "ERROR",
+            "Failed to publish enriched event",
+            job_id=job_id,
+            error_code=error_entry.get("ErrorCode"),
+            error_message=error_entry.get("ErrorMessage"),
+        )

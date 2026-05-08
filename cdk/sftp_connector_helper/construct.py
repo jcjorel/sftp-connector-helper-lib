@@ -12,6 +12,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_lambda as _lambda,
     aws_lambda_event_sources as lambda_event_sources,
+    aws_logs as logs,
     aws_pipes as pipes,
     aws_sns as sns,
     aws_sqs as sqs,
@@ -47,6 +48,7 @@ class SftpConnectorHelperProps:
     event_writer_timeout: cdk.Duration = cdk.Duration.seconds(30)
     joiner_memory: int = 256
     joiner_timeout: cdk.Duration = cdk.Duration.seconds(30)
+    event_bus_log_level: Optional[str] = "INFO"  # OFF, ERROR, INFO, TRACE; None disables logging
 
 
 class SftpConnectorHelper(Construct):
@@ -121,6 +123,18 @@ class SftpConnectorHelper(Construct):
                 "EventBus",
                 event_bus_name="sftp-connector-helper-bus",
             )
+
+        # EventBridge Bus Logging
+        # Note: LogConfig sets the level on the bus. Log delivery to CloudWatch requires
+        # the CloudWatch Logs Delivery API (CfnDeliverySource/Destination/Delivery) which
+        # is not available for EventBridge in all regions. When unavailable, logs are
+        # still generated at the configured level but require manual delivery setup.
+        if props.event_bus_log_level and props.event_bus_log_level != "OFF" and not props.existing_bus_arn:
+            cfn_bus = self._event_bus.node.default_child
+            cfn_bus.add_property_override("LogConfig", {
+                "Level": props.event_bus_log_level,
+                "IncludeDetail": "FULL",
+            })
 
         # SNS Topic for orphan alerts
         self._orphan_topic = sns.Topic(self, "OrphanAlertTopic")

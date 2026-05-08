@@ -49,6 +49,10 @@
     "HelperEventBusE75C8896": {
       "Type": "AWS::Events::EventBus",
       "Properties": {
+        "LogConfig": {
+          "Level": "INFO",
+          "IncludeDetail": "FULL"
+        },
         "Name": "sftp-connector-helper-bus"
       }
     },
@@ -227,7 +231,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "890dd24933053615f6121df8f6c547f0d6e564965d4efa8f0f19a320d34b9b93.zip"
+          "S3Key": "349720800a04350301afa262eae98a3905337bd8c7f9acf5f3877dc307489310.zip"
         },
         "Environment": {
           "Variables": {
@@ -557,7 +561,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "e5404d1fce68c8016f36571a6d35d74e3bd5d554d68b0d77aaa05aede27a64e1.zip"
+          "S3Key": "c5a6967c3bfa41517cb144f88b735ecc2947902dc55f3320e65cd30369809693.zip"
         },
         "Environment": {
           "Variables": {

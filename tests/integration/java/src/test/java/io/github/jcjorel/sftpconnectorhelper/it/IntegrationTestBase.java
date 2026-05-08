@@ -21,6 +21,7 @@ import software.amazon.awssdk.services.sqs.model.*;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.awaitility.Awaitility.await;
@@ -62,6 +63,9 @@ public abstract class IntegrationTestBase {
     /** Job IDs to clean up from DynamoDB after all tests. */
     protected static final List<String> jobIdsToCleanup = new CopyOnWriteArrayList<>();
 
+    /** Queue URLs already deleted in this JVM session (SQS has 60s propagation delay). */
+    private static final Set<String> deletedQueueUrls = ConcurrentHashMap.newKeySet();
+
     @BeforeAll
     static void setupInfrastructure() {
         LOG.info("Setting up test infrastructure: region={}, connector={}, table={}, bus={}",
@@ -97,12 +101,12 @@ public abstract class IntegrationTestBase {
         queueArn = attrs.attributes().get(QueueAttributeName.QUEUE_ARN);
         LOG.info("Queue created: {}", queueArn);
 
-        // Create EventBridge rule on dedicated bus
+        // Create EventBridge rule on dedicated bus (match both real events and canary)
         LOG.info("Creating EventBridge rule: {} on bus: {}", ruleName, EVENT_BUS_NAME);
         PutRuleResponse ruleResp = ebClient.putRule(PutRuleRequest.builder()
                 .name(ruleName)
                 .eventBusName(EVENT_BUS_NAME)
-                .eventPattern("{\"source\":[\"aws.transfer\"]}")
+                .eventPattern("{\"source\":[\"custom.sftp-connector-helper\",\"test.canary\"]}")
                 .state(RuleState.ENABLED)
                 .build());
         String ruleArn = ruleResp.ruleArn();
@@ -130,6 +134,38 @@ public abstract class IntegrationTestBase {
                 .eventBusName(EVENT_BUS_NAME)
                 .targets(Target.builder().id("test-queue").arn(queueArn).build())
                 .build());
+
+        // Canary warm-up: require 3 consecutive deliveries to confirm stable rule propagation
+        String canaryId = "canary-" + sessionId;
+        LOG.info("Sending canary events to confirm rule propagation (id={}, required=3)", canaryId);
+        int[] received = {0};
+
+        await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofSeconds(2)).until(() -> {
+            ebClient.putEvents(PutEventsRequest.builder()
+                    .entries(PutEventsRequestEntry.builder()
+                            .source("test.canary")
+                            .detailType("Integration Test Canary")
+                            .eventBusName(EVENT_BUS_NAME)
+                            .detail("{\"canary\":\"" + canaryId + "\"}")
+                            .build())
+                    .build());
+            ReceiveMessageResponse resp = sqsClient.receiveMessage(ReceiveMessageRequest.builder()
+                    .queueUrl(queueUrl).maxNumberOfMessages(10).waitTimeSeconds(2).build());
+            boolean found = false;
+            for (Message msg : resp.messages()) {
+                sqsClient.deleteMessage(DeleteMessageRequest.builder()
+                        .queueUrl(queueUrl).receiptHandle(msg.receiptHandle()).build());
+                if (msg.body().contains(canaryId)) found = true;
+            }
+            if (found) {
+                received[0]++;
+                LOG.info("Canary received ({}/3) — rule is active", received[0]);
+            } else {
+                received[0] = 0;
+            }
+            return received[0] >= 3;
+        });
+
         LOG.info("Test infrastructure ready. Rule ARN: {}", ruleArn);
     }
 
@@ -207,11 +243,14 @@ public abstract class IntegrationTestBase {
                     .queueNamePrefix(RESOURCE_PREFIX)
                     .build());
             for (String orphanQueueUrl : queuesResp.queueUrls()) {
+                if (deletedQueueUrls.contains(orphanQueueUrl)) continue;
                 LOG.info("Removing orphaned SQS queue: {}", orphanQueueUrl);
                 try {
                     sqsClient.deleteQueue(DeleteQueueRequest.builder().queueUrl(orphanQueueUrl).build());
+                    deletedQueueUrls.add(orphanQueueUrl);
                 } catch (Exception e) {
                     LOG.warn("Failed to delete queue {}: {}", orphanQueueUrl, e.getMessage());
+                    deletedQueueUrls.add(orphanQueueUrl);
                 }
             }
         } catch (Exception e) {
