@@ -1,7 +1,7 @@
 import os
 import aws_cdk as cdk
 
-from sftp_connector_helper.construct import SftpConnectorHelper
+from sftp_connector_helper.construct import SftpConnectorHelper, SftpConnectorHelperProps
 
 app = cdk.App()
 stack = cdk.Stack(app, "SftpConnectorHelperStack",
@@ -10,5 +10,9 @@ stack = cdk.Stack(app, "SftpConnectorHelperStack",
         region=os.environ.get("CDK_DEFAULT_REGION"),
     )
 )
-SftpConnectorHelper(stack, "SftpConnectorHelper")
+
+existing_table_arn = app.node.try_get_context("existing_table_arn")
+props = SftpConnectorHelperProps(existing_table_arn=existing_table_arn) if existing_table_arn else None
+
+SftpConnectorHelper(stack, "SftpConnectorHelper", props)
 app.synth()
