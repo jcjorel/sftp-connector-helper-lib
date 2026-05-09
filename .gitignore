@@ -26,3 +26,7 @@ Thumbs.db
 # CDK
 cdk.out/
 node_modules/
+
+# IDE Chat database
+chats.db
+
