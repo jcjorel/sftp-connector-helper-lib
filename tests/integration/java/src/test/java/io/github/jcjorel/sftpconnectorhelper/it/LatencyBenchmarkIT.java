@@ -33,7 +33,7 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
 
     private static final Logger LOG = LoggerFactory.getLogger(LatencyBenchmarkIT.class);
 
-    private static final int ITERATIONS = Integer.parseInt(prop("BENCHMARK_ITERATIONS", "3"));
+    private static final int ITERATIONS = Integer.parseInt(prop("BENCHMARK_ITERATIONS", "5"));
     private static final long THROTTLE_MS = Long.parseLong(prop("BENCHMARK_SLEEP_MS", "7500"));
     private static final long LONG_THROTTLE_MS = THROTTLE_MS * 5;
     private static final Duration POLL_TIMEOUT = Duration.ofSeconds(90);

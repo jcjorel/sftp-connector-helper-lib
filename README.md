@@ -69,14 +69,14 @@ def lambda_handler(event, context):
 
 The helper adds a single metadata write per operation (~5–10 ms typical). End-to-end latency overhead is dominated by SFTP Connector variance, not the metadata write:
 
-| Operation | Direct (mean) | Helper (mean) | Overhead (mean) |
-|-----------|--------------|---------------|----------------|
-| StartFileTransfer | 1501 ms | 2265 ms | +763 ms |
-| StartDirectoryListing | 1303 ms | 1992 ms | +688 ms |
-| StartRemoteMove | 860 ms | 1798 ms | +937 ms |
-| StartRemoteDelete | 1637 ms | 1716 ms | +79 ms |
-| MultiFileSend (10 files) | 5268 ms | 5790 ms | +521 ms |
-| MultiFileRetrieve (10 files) | 5944 ms | 6316 ms | +371 ms |
+| Operation | Direct (min / **mean** / max) | Helper (min / **mean** / max) | Overhead (min / **mean** / max) |
+|-----------|-------------------------------|-------------------------------|-------------------------------|
+| StartFileTransfer | 1263 / **1585** / 2036 ms | 1432 / **2024** / 3129 ms | −339 / **+438** / +1341 ms |
+| StartDirectoryListing | 651 / **1381** / 2338 ms | 1097 / **1760** / 2192 ms | −830 / **+379** / +1390 ms |
+| StartRemoteMove | 481 / **1549** / 2453 ms | 867 / **1227** / 1374 ms | −1410 / **−322** / +866 ms |
+| StartRemoteDelete | 716 / **1178** / 2232 ms | 904 / **1492** / 2133 ms | −605 / **+314** / +1136 ms |
+| MultiFileSend (10 files) | 4256 / **6060** / 8949 ms | 5184 / **5531** / 5857 ms | −3220 / **−528** / +1601 ms |
+| MultiFileRetrieve (10 files) | 2936 / **4240** / 5206 ms | 3863 / **4701** / 5341 ms | +91 / **+461** / +1366 ms |
 
 Run the benchmark: `make test-integration AWS_PROFILE=<profile> AWS_REGION=<region>`
 
