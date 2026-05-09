@@ -1,7 +1,9 @@
 ---
 name: aws-test-env
-description: AWS test environment parameters for running tests, deploying, or interacting with the SFTP Connector test infrastructure.
+description: AWS test environment parameters for running tests, deploying, or interacting with the SFTP Connector test infrastructure. Use when running integration tests, deploying the stack, or making AWS CLI calls against the test environment. Do NOT use for production operations or non-test AWS accounts.
 ---
+
+The keywords MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RECOMMENDED, NOT RECOMMENDED, MAY, and OPTIONAL in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) and [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174).
 
 # AWS Test Environment
 
@@ -15,6 +17,16 @@ description: AWS test environment parameters for running tests, deploying, or in
 - **TEST_S3_LISTING_PREFIX**: `listing-tests/`
 - **TEST_S3_FILE_TRANSFER_PREFIX**: `file-transfer-tests/`
 
+## Path Format Constraints
+
+- `remote-directory-path` MUST start with `/` and MUST NOT have a trailing slash.
+  - ✅ `/tmp/test_sftp_connector`
+  - ❌ `/tmp/test_sftp_connector/`
+- `output-directory-path` MUST start with `/`, format `/<bucket>/<prefix>` — MUST NOT use `s3://` scheme or trailing slash.
+  - ✅ `/sftp-connector-helper-test-a1b2c3d4e5f6/listing-tests`
+  - ❌ `s3://sftp-connector-helper-test-a1b2c3d4e5f6/listing-tests/`
+  - ❌ `/sftp-connector-helper-test-a1b2c3d4e5f6/listing-tests/`
+
 ## SFTP Connector IAM Configuration
 
 The connector's access role is `TransferSFTPConnectorRole` with inline policy `TransferSFTPConnectorPolicy`.
@@ -25,23 +37,17 @@ The connector's access role is `TransferSFTPConnectorRole` with inline policy `T
 - `s3:GetBucketLocation`, `s3:ListBucket`
 
 **Required Secrets Manager permission:**
-- `secretsmanager:GetSecretValue` on the ARN of the AWS SecretManager secret used by the test AWS TransferFamily SFTP Connector.
+- `secretsmanager:GetSecretValue` on the ARN of the secret used by the test SFTP Connector.
 
-**Note:** The `output-directory-path` for directory listings must point to a bucket/prefix that this role can write to. Without `s3:PutObject` on the output path, listings fail with "Access denied".
+The connector role MUST have `s3:PutObject` on the output path for directory listings. Without it, listings fail with "Access denied".
 
-Note: When verifying the AWS test environment readiness, control that the connector's access role has the above permissions, and that the specified S3 bucket and prefix exist and are accessible to this role.
+## Verification
 
-## AWS CLI Path Format Rules
-
-**Critical:** The Transfer Family API has strict path format requirements:
-
-- **`remote-directory-path`**: Must start with `/` and must **NOT** have a trailing slash.
-  - ✅ `/tmp/test_sftp_connector`
-  - ❌ `/tmp/test_sftp_connector/`
-- **`output-directory-path`**: Must start with `/`, format is `/<bucket>/<prefix>` (no trailing slash).
-  - ✅ `/sftp-connector-helper-test-a1b2c3d4e5f6/listing-tests`
-  - ❌ `s3://sftp-connector-helper-test-a1b2c3d4e5f6/listing-tests/`
-  - ❌ `/sftp-connector-helper-test-a1b2c3d4e5f6/listing-tests/`
+- If verifying environment readiness, MUST confirm:
+  1. The connector's access role has all permissions listed above.
+  2. The S3 bucket and prefixes exist and are accessible to the role.
+  3. A test `start-directory-listing` completes without "Access denied".
+- If a listing result S3 object does not appear after 5 seconds, SHOULD retry after 10 seconds. If it still fails, verify the connector role has `s3:PutObject` on the output path.
 
 ## Common Operations
 
