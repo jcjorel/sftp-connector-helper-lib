@@ -70,38 +70,43 @@ def detect_orphan(table, old_image: dict, job_id: str, sns_client, sns_topic_arn
 
     Four branches:
     1. Both metadata AND eventResult → normal expiry, ignore
-    2. operationType == FILE_TRANSFER (master) → query GSI Limit=1
-    3. metadata only (no eventResult) → orphan
+    2. Master record (metadata, no eventResult, no transferId) → query GSI to check per-file records
+    3. metadata only (non-master, no eventResult) → orphan
     4. eventResult only (no metadata) → orphan
+
+    Master record detection: master records have metadata + no eventResult + no transferId attribute.
+    Per-file records always have a transferId attribute pointing to their master.
     """
     has_metadata = "metadata" in old_image
     has_event_result = "eventResult" in old_image
+    has_transfer_id = "transferId" in old_image
 
     # Branch 1: normal expiry
     if has_metadata and has_event_result:
         log_structured("INFO", "Normal expiry, both fields present", job_id=job_id)
         return
 
-    # Branch 2: FILE_TRANSFER master record
-    if old_image.get("operationType") == "FILE_TRANSFER":
+    # Branch 2: master record (metadata, no eventResult, no transferId)
+    if has_metadata and not has_event_result and not has_transfer_id:
         response = table.query(
             IndexName="transferId-index",
             KeyConditionExpression=Key("transferId").eq(job_id),
             Limit=1,
         )
-        if response.get("Count", 0) == 0:
-            connector_id = _extract_connector_id(old_image)
-            log_structured("WARNING", "Orphaned master record, no per-file records found", job_id=job_id, connector_id=connector_id, operation="orphan_detection")
-            try:
-                _emit_orphan_metric(cloudwatch_client, connector_id)
-                _publish_orphan(sns_client, sns_topic_arn, job_id, "master-no-files", connector_id, old_image)
-            except Exception:
-                log_structured("WARNING", "Failed to emit orphan observability", job_id=job_id, operation="orphan_detection")
-        else:
+        if response.get("Count", 0) > 0:
             log_structured("INFO", "Master record normal expiry, per-file records exist", job_id=job_id)
+            return
+        # No per-file records found — could be a non-fan-out operation or an orphaned master
+        connector_id = "UNKNOWN"
+        log_structured("WARNING", "Orphaned record, metadata without event", job_id=job_id, connector_id=connector_id, operation="orphan_detection")
+        try:
+            _emit_orphan_metric(cloudwatch_client, connector_id)
+            _publish_orphan(sns_client, sns_topic_arn, job_id, "metadata-only", connector_id, old_image)
+        except Exception:
+            log_structured("WARNING", "Failed to emit orphan observability", job_id=job_id, operation="orphan_detection")
         return
 
-    # Branch 3: metadata-only orphan
+    # Branch 3: metadata-only orphan (per-file record that never got joined)
     if has_metadata and not has_event_result:
         connector_id = "UNKNOWN"
         log_structured("WARNING", "Orphaned record, metadata without event", job_id=job_id, connector_id=connector_id, operation="orphan_detection")

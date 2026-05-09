@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jcjorel.sftpconnectorhelper.SftpConnectorHelper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.TestInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.regions.Region;
@@ -15,9 +17,14 @@ import software.amazon.awssdk.services.dynamodb.model.GetItemRequest;
 import software.amazon.awssdk.services.dynamodb.model.GetItemResponse;
 import software.amazon.awssdk.services.eventbridge.EventBridgeClient;
 import software.amazon.awssdk.services.eventbridge.model.*;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.*;
+import software.amazon.awssdk.services.transfer.TransferClient;
+import software.amazon.awssdk.services.transfer.model.StartFileTransferRequest;
 
 import java.time.Duration;
 import java.util.*;
@@ -40,6 +47,8 @@ public abstract class IntegrationTestBase {
 
     private static final String RESOURCE_PREFIX = "integ-test-java-";
     private static final String RULE_PREFIX = RESOURCE_PREFIX + "rule-";
+    private static final String RAW_QUEUE_PREFIX = RESOURCE_PREFIX + "raw-";
+    private static final String DEFAULT_BUS_RULE_PREFIX = RESOURCE_PREFIX + "rule-default-";
 
     protected static final String CONNECTOR_ID = prop("CONNECTOR_ID", "c-0123456789abcdef0");
     protected static final String TABLE_NAME = prop("TABLE_NAME", "sftp-connector-helper");
@@ -55,16 +64,25 @@ public abstract class IntegrationTestBase {
     protected static SqsClient sqsClient;
     protected static EventBridgeClient ebClient;
     protected static S3Client s3Client;
+    protected static TransferClient transferClient;
 
     private static String queueUrl;
     private static String queueArn;
     private static String ruleName;
+    protected static String rawQueueUrl;
+    private static String rawQueueArn;
+    private static String defaultBusRuleName;
 
     /** Job IDs to clean up from DynamoDB after all tests. */
     protected static final List<String> jobIdsToCleanup = new CopyOnWriteArrayList<>();
 
     /** Queue URLs already deleted in this JVM session (SQS has 60s propagation delay). */
     private static final Set<String> deletedQueueUrls = ConcurrentHashMap.newKeySet();
+
+    @BeforeEach
+    void logTestEntry(TestInfo testInfo) {
+        LOG.info(">>> Entering test: {}", testInfo.getDisplayName());
+    }
 
     @BeforeAll
     static void setupInfrastructure() {
@@ -83,6 +101,7 @@ public abstract class IntegrationTestBase {
                 .tableName(TABLE_NAME)
                 .ttlDuration(Duration.ofHours(1))
                 .build();
+        transferClient = helper.getTransferClient();
 
         // Create temporary SQS queue
         String sessionId = UUID.randomUUID().toString().substring(0, 8);
@@ -133,6 +152,53 @@ public abstract class IntegrationTestBase {
                 .rule(ruleName)
                 .eventBusName(EVENT_BUS_NAME)
                 .targets(Target.builder().id("test-queue").arn(queueArn).build())
+                .build());
+
+        // Create raw SQS queue for capturing events from the default bus
+        String rawQueueName = RAW_QUEUE_PREFIX + sessionId;
+        defaultBusRuleName = DEFAULT_BUS_RULE_PREFIX + sessionId;
+
+        LOG.info("Creating raw SQS queue: {}", rawQueueName);
+        CreateQueueResponse rawCreateResp = sqsClient.createQueue(CreateQueueRequest.builder()
+                .queueName(rawQueueName).build());
+        rawQueueUrl = rawCreateResp.queueUrl();
+
+        GetQueueAttributesResponse rawAttrs = sqsClient.getQueueAttributes(GetQueueAttributesRequest.builder()
+                .queueUrl(rawQueueUrl)
+                .attributeNames(QueueAttributeName.QUEUE_ARN)
+                .build());
+        rawQueueArn = rawAttrs.attributes().get(QueueAttributeName.QUEUE_ARN);
+        LOG.info("Raw queue created: {}", rawQueueArn);
+
+        // Create EventBridge rule on default bus for raw Transfer Family events
+        LOG.info("Creating EventBridge rule: {} on default bus", defaultBusRuleName);
+        PutRuleResponse defaultRuleResp = ebClient.putRule(PutRuleRequest.builder()
+                .name(defaultBusRuleName)
+                .eventPattern("{\"source\":[\"aws.transfer\"],\"detail-type\":[{\"prefix\":\"SFTP Connector\"}]}")
+                .state(RuleState.ENABLED)
+                .build());
+        String defaultRuleArn = defaultRuleResp.ruleArn();
+
+        // Set SQS policy allowing both rules to send messages
+        String rawPolicy = """
+                {
+                  "Version":"2012-10-17",
+                  "Statement":[{
+                    "Effect":"Allow",
+                    "Principal":{"Service":"events.amazonaws.com"},
+                    "Action":"sqs:SendMessage",
+                    "Resource":"%s",
+                    "Condition":{"ArnEquals":{"aws:SourceArn":"%s"}}
+                  }]
+                }""".formatted(rawQueueArn, defaultRuleArn);
+        sqsClient.setQueueAttributes(SetQueueAttributesRequest.builder()
+                .queueUrl(rawQueueUrl)
+                .attributes(Map.of(QueueAttributeName.POLICY, rawPolicy))
+                .build());
+
+        ebClient.putTargets(PutTargetsRequest.builder()
+                .rule(defaultBusRuleName)
+                .targets(Target.builder().id("raw-test-queue").arn(rawQueueArn).build())
                 .build());
 
         // Canary warm-up: require 3 consecutive deliveries to confirm stable rule propagation
@@ -202,7 +268,7 @@ public abstract class IntegrationTestBase {
     private static void cleanupOrphanedTestResources() {
         LOG.info("Scanning for orphaned test resources (prefix={})", RESOURCE_PREFIX);
 
-        // Clean up EventBridge rules
+        // Clean up EventBridge rules on dedicated bus
         try {
             ListRulesResponse rulesResp = ebClient.listRules(ListRulesRequest.builder()
                     .eventBusName(EVENT_BUS_NAME)
@@ -210,34 +276,26 @@ public abstract class IntegrationTestBase {
                     .build());
             for (Rule rule : rulesResp.rules()) {
                 LOG.info("Removing orphaned EventBridge rule: {}", rule.name());
-                try {
-                    // List and remove all targets first
-                    ListTargetsByRuleResponse targets = ebClient.listTargetsByRule(
-                            ListTargetsByRuleRequest.builder()
-                                    .rule(rule.name())
-                                    .eventBusName(EVENT_BUS_NAME)
-                                    .build());
-                    if (!targets.targets().isEmpty()) {
-                        List<String> targetIds = targets.targets().stream().map(Target::id).toList();
-                        ebClient.removeTargets(RemoveTargetsRequest.builder()
-                                .rule(rule.name())
-                                .eventBusName(EVENT_BUS_NAME)
-                                .ids(targetIds)
-                                .build());
-                    }
-                    ebClient.deleteRule(DeleteRuleRequest.builder()
-                            .name(rule.name())
-                            .eventBusName(EVENT_BUS_NAME)
-                            .build());
-                } catch (Exception e) {
-                    LOG.warn("Failed to delete rule {}: {}", rule.name(), e.getMessage());
-                }
+                deleteRuleWithTargets(rule.name(), EVENT_BUS_NAME);
             }
         } catch (Exception e) {
             LOG.warn("Failed to list EventBridge rules: {}", e.getMessage());
         }
 
-        // Clean up SQS queues
+        // Clean up EventBridge rules on default bus
+        try {
+            ListRulesResponse defaultRulesResp = ebClient.listRules(ListRulesRequest.builder()
+                    .namePrefix(DEFAULT_BUS_RULE_PREFIX)
+                    .build());
+            for (Rule rule : defaultRulesResp.rules()) {
+                LOG.info("Removing orphaned default-bus EventBridge rule: {}", rule.name());
+                deleteRuleWithTargets(rule.name(), null);
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to list default-bus EventBridge rules: {}", e.getMessage());
+        }
+
+        // Clean up SQS queues (both regular and raw)
         try {
             ListQueuesResponse queuesResp = sqsClient.listQueues(ListQueuesRequest.builder()
                     .queueNamePrefix(RESOURCE_PREFIX)
@@ -255,6 +313,27 @@ public abstract class IntegrationTestBase {
             }
         } catch (Exception e) {
             LOG.warn("Failed to list SQS queues: {}", e.getMessage());
+        }
+    }
+
+    private static void deleteRuleWithTargets(String name, String busName) {
+        try {
+            ListTargetsByRuleRequest.Builder listReq = ListTargetsByRuleRequest.builder().rule(name);
+            DeleteRuleRequest.Builder deleteReq = DeleteRuleRequest.builder().name(name);
+            RemoveTargetsRequest.Builder removeReq = RemoveTargetsRequest.builder().rule(name);
+            if (busName != null) {
+                listReq.eventBusName(busName);
+                deleteReq.eventBusName(busName);
+                removeReq.eventBusName(busName);
+            }
+            ListTargetsByRuleResponse targets = ebClient.listTargetsByRule(listReq.build());
+            if (!targets.targets().isEmpty()) {
+                List<String> targetIds = targets.targets().stream().map(Target::id).toList();
+                ebClient.removeTargets(removeReq.ids(targetIds).build());
+            }
+            ebClient.deleteRule(deleteReq.build());
+        } catch (Exception e) {
+            LOG.warn("Failed to delete rule {}: {}", name, e.getMessage());
         }
     }
 
@@ -290,11 +369,11 @@ public abstract class IntegrationTestBase {
         LOG.info("Polling for enriched event: {}={} (timeout={}s)", jobIdField, jobIdValue, timeout.toSeconds());
         List<JsonNode> found = new ArrayList<>();
 
-        await().atMost(timeout).pollInterval(Duration.ofSeconds(2)).until(() -> {
+        await().atMost(timeout).pollInterval(Duration.ofMillis(100)).until(() -> {
             ReceiveMessageResponse resp = sqsClient.receiveMessage(ReceiveMessageRequest.builder()
                     .queueUrl(queueUrl)
                     .maxNumberOfMessages(10)
-                    .waitTimeSeconds(2)
+                    .waitTimeSeconds(20)
                     .build());
             for (Message msg : resp.messages()) {
                 sqsClient.deleteMessage(DeleteMessageRequest.builder()
@@ -322,6 +401,120 @@ public abstract class IntegrationTestBase {
         return found.get(0);
     }
 
+    /**
+     * Poll the raw SQS queue for a Transfer Family event matching the given job ID field and value.
+     * Returns the parsed event detail node.
+     */
+    protected static JsonNode pollForRawEvent(String jobIdField, String jobIdValue, Duration timeout) {
+        LOG.info("Polling for raw event: {}={} (timeout={}s)", jobIdField, jobIdValue, timeout.toSeconds());
+        List<JsonNode> found = new ArrayList<>();
+
+        await().atMost(timeout).pollInterval(Duration.ofMillis(100)).until(() -> {
+            ReceiveMessageResponse resp = sqsClient.receiveMessage(ReceiveMessageRequest.builder()
+                    .queueUrl(rawQueueUrl)
+                    .maxNumberOfMessages(10)
+                    .waitTimeSeconds(20)
+                    .build());
+            for (Message msg : resp.messages()) {
+                sqsClient.deleteMessage(DeleteMessageRequest.builder()
+                        .queueUrl(rawQueueUrl).receiptHandle(msg.receiptHandle()).build());
+                try {
+                    JsonNode event = MAPPER.readTree(msg.body());
+                    JsonNode detail = event.has("detail") && event.get("detail").isTextual()
+                            ? MAPPER.readTree(event.get("detail").asText())
+                            : event.get("detail");
+                    if (detail != null && detail.has(jobIdField)
+                            && jobIdValue.equals(detail.get(jobIdField).asText())) {
+                        LOG.info("Found matching raw event for {}={}", jobIdField, jobIdValue);
+                        found.add(detail);
+                    }
+                } catch (Exception e) {
+                    LOG.warn("Failed to parse raw SQS message: {}", e.getMessage());
+                }
+            }
+            return !found.isEmpty();
+        });
+
+        LOG.info("Raw event received for {}={}", jobIdField, jobIdValue);
+        return found.get(0);
+    }
+
+    /**
+     * Poll the raw SQS queue for multiple events matching the given field and value.
+     * Returns all matching event detail nodes once the expected count is reached.
+     */
+    protected List<JsonNode> pollForAllRawEvents(String jobIdField, String jobIdValue, int expectedCount, Duration timeout) {
+        LOG.info("Polling for {} raw events: {}={} (timeout={}s)", expectedCount, jobIdField, jobIdValue, timeout.toSeconds());
+        List<JsonNode> found = new ArrayList<>();
+
+        await().atMost(timeout).pollInterval(Duration.ofMillis(100)).until(() -> {
+            ReceiveMessageResponse resp = sqsClient.receiveMessage(ReceiveMessageRequest.builder()
+                    .queueUrl(rawQueueUrl)
+                    .maxNumberOfMessages(10)
+                    .waitTimeSeconds(20)
+                    .build());
+            for (Message msg : resp.messages()) {
+                sqsClient.deleteMessage(DeleteMessageRequest.builder()
+                        .queueUrl(rawQueueUrl).receiptHandle(msg.receiptHandle()).build());
+                try {
+                    JsonNode event = MAPPER.readTree(msg.body());
+                    JsonNode detail = event.has("detail") && event.get("detail").isTextual()
+                            ? MAPPER.readTree(event.get("detail").asText())
+                            : event.get("detail");
+                    if (detail != null && detail.has(jobIdField)
+                            && jobIdValue.equals(detail.get(jobIdField).asText())) {
+                        found.add(detail);
+                        LOG.info("Found matching raw event {}/{} for {}={}", found.size(), expectedCount, jobIdField, jobIdValue);
+                    }
+                } catch (Exception e) {
+                    LOG.warn("Failed to parse raw SQS message: {}", e.getMessage());
+                }
+            }
+            return found.size() >= expectedCount;
+        });
+
+        LOG.info("All {} raw events received for {}={}", found.size(), jobIdField, jobIdValue);
+        return found;
+    }
+
+    /**
+     * Poll the SQS queue for multiple enriched events matching the given field and value.
+     * Returns all matching event detail nodes once the expected count is reached.
+     */
+    protected List<JsonNode> pollForAllEnrichedEvents(String jobIdField, String jobIdValue, int expectedCount, Duration timeout) {
+        LOG.info("Polling for {} enriched events: {}={} (timeout={}s)", expectedCount, jobIdField, jobIdValue, timeout.toSeconds());
+        List<JsonNode> found = new ArrayList<>();
+
+        await().atMost(timeout).pollInterval(Duration.ofMillis(100)).until(() -> {
+            ReceiveMessageResponse resp = sqsClient.receiveMessage(ReceiveMessageRequest.builder()
+                    .queueUrl(queueUrl)
+                    .maxNumberOfMessages(10)
+                    .waitTimeSeconds(20)
+                    .build());
+            for (Message msg : resp.messages()) {
+                sqsClient.deleteMessage(DeleteMessageRequest.builder()
+                        .queueUrl(queueUrl).receiptHandle(msg.receiptHandle()).build());
+                try {
+                    JsonNode event = MAPPER.readTree(msg.body());
+                    JsonNode detail = event.has("detail") && event.get("detail").isTextual()
+                            ? MAPPER.readTree(event.get("detail").asText())
+                            : event.get("detail");
+                    if (detail != null && detail.has(jobIdField)
+                            && jobIdValue.equals(detail.get(jobIdField).asText())) {
+                        found.add(detail);
+                        LOG.info("Found matching event {}/{} for {}={}", found.size(), expectedCount, jobIdField, jobIdValue);
+                    }
+                } catch (Exception e) {
+                    LOG.warn("Failed to parse SQS message: {}", e.getMessage());
+                }
+            }
+            return found.size() >= expectedCount;
+        });
+
+        LOG.info("All {} enriched events received for {}={}", found.size(), jobIdField, jobIdValue);
+        return found;
+    }
+
     /** Assert that _helper_metadata in the event matches the original metadata. */
     protected void assertEnrichedMetadata(JsonNode eventDetail, String originalMetadata) throws Exception {
         assert eventDetail.has("_helper_metadata") : "Enriched event missing _helper_metadata";
@@ -332,7 +525,54 @@ public abstract class IntegrationTestBase {
         LOG.info("Enriched event metadata matches expected payload");
     }
 
-    private static String prop(String name, String defaultValue) {
+    /**
+     * Deliberate pause between timed sequences to avoid SFTP Connector silent throttling.
+     * NOT for waiting on async completion — use poll methods for that.
+     */
+    protected void throttleGuard(long ms) {
+        if (ms > 0) {
+            LOG.info("Throttle guard: sleeping {}ms between timed sequences", ms);
+            try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+    }
+
+    /**
+     * Send a file to the remote server and wait for confirmed completion via event polling.
+     * Use this instead of Thread.sleep() for setup phases.
+     */
+    protected String sendToRemoteAndWait(String s3Key) {
+        uploadTestFile(s3Key, "setup-content");
+        StartFileTransferRequest req = StartFileTransferRequest.builder()
+                .connectorId(CONNECTOR_ID)
+                .sendFilePaths("/" + TEST_S3_BUCKET + "/" + s3Key)
+                .remoteDirectoryPath(REMOTE_DIR).build();
+        String transferId = transferClient.startFileTransfer(req).transferId();
+        trackForCleanup(transferId);
+        pollForRawEvent("transfer-id", transferId, Duration.ofSeconds(90));
+        return transferId;
+    }
+
+    /** Upload a test file to S3. */
+    protected void uploadTestFile(String key, String content) {
+        s3Client.putObject(PutObjectRequest.builder().bucket(TEST_S3_BUCKET).key(key).build(),
+                RequestBody.fromString(content));
+    }
+
+    /** Delete a single S3 object (swallows errors). */
+    protected void cleanupS3(String key) {
+        try { s3Client.deleteObject(DeleteObjectRequest.builder().bucket(TEST_S3_BUCKET).key(key).build()); }
+        catch (Exception ignored) {}
+    }
+
+    /** Delete all S3 objects under a prefix (swallows errors). */
+    protected void cleanupS3Prefix(String prefix) {
+        try {
+            s3Client.listObjectsV2(b -> b.bucket(TEST_S3_BUCKET).prefix(prefix)).contents()
+                    .forEach(o -> cleanupS3(o.key()));
+        } catch (Exception ignored) {}
+    }
+
+    static String prop(String name, String defaultValue) {
         String val = System.getProperty(name);
         if (val == null || val.isEmpty() || val.equals("null")) {
             val = System.getenv(name);

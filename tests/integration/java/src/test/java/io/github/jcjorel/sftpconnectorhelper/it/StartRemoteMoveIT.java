@@ -30,7 +30,7 @@ class StartRemoteMoveIT extends IntegrationTestBase {
     private static String testFileKey;
 
     @BeforeAll
-    static void uploadAndSendFile() throws Exception {
+    static void uploadAndSendFile() {
         // Upload file to S3
         testFileKey = "file-transfer-tests/" + FILE_NAME;
         LOG.info("Uploading test file for move: s3://{}/{}", TEST_S3_BUCKET, testFileKey);
@@ -49,10 +49,10 @@ class StartRemoteMoveIT extends IntegrationTestBase {
         assertInstanceOf(SftpOperationResult.Success.class, sendResult);
         String transferId = ((SftpOperationResult.Success<StartFileTransferResponse>) sendResult).response().transferId();
         jobIdsToCleanup.add(transferId);
-        LOG.info("Setup transfer started: transferId={}. Waiting 10s for completion...", transferId);
+        LOG.info("Setup transfer started: transferId={}. Waiting for completion via event polling...", transferId);
 
-        // Wait for transfer to complete before attempting move
-        Thread.sleep(10_000);
+        // Wait for transfer to complete using event-based polling (not Thread.sleep)
+        pollForRawEvent("transfer-id", transferId, Duration.ofSeconds(90));
 
         // Cleanup S3 test file
         s3Client.deleteObject(DeleteObjectRequest.builder().bucket(TEST_S3_BUCKET).key(testFileKey).build());

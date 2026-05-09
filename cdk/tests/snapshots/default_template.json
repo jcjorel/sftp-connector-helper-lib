@@ -157,6 +157,16 @@
                   "Arn"
                 ]
               }
+            },
+            {
+              "Action": "cloudwatch:PutMetricData",
+              "Condition": {
+                "StringEquals": {
+                  "cloudwatch:namespace": "SftpConnectorHelper"
+                }
+              },
+              "Effect": "Allow",
+              "Resource": "*"
             }
           ],
           "Version": "2012-10-17"
@@ -176,7 +186,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "e84239cdf7455170a5ebc9af899ffb75ad43887a310dd635b13ded9cc48c78ad.zip"
+          "S3Key": "d392c6e668a7a098ba29cc4d7c08b2a6ab791b4dacce3c519548778d5d189f1e.zip"
         },
         "Environment": {
           "Variables": {
@@ -394,7 +404,7 @@
           "S3Bucket": {
             "Fn::Sub": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}"
           },
-          "S3Key": "e1c4b83afb617b1d540df1bbd3fea67c1b392781c6ee2d0044c254e6e7555e93.zip"
+          "S3Key": "ad1a0980bb7c437812cc81dc2576ecea6a14c5e919c707ed9686d16c67dd3aba.zip"
         },
         "Environment": {
           "Variables": {

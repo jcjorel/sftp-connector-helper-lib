@@ -9,6 +9,10 @@ OPERATION_MAP = {
         "id_field": "transfer-id",
         "operation_type": "FILE_TRANSFER",
     },
+    "SFTP Connector File Retrieve": {
+        "id_field": "transfer-id",
+        "operation_type": "FILE_TRANSFER",
+    },
     "SFTP Connector Directory Listing": {
         "id_field": "listing-id",
         "operation_type": "DIRECTORY_LISTING",

@@ -32,10 +32,10 @@ class TestOrphanDetectionUnit:
         return client
 
     def test_metadata_only_orphan_emits_metric_and_sns(self, mock_table, mock_sns_client, mock_cw_client):
-        """Metadata present, no eventResult → orphan."""
+        """Metadata present with transferId, no eventResult → orphan (per-file record)."""
         from orphan_detection import detect_orphan
 
-        old_image = {"metadata": json.dumps({"orderId": "ORD-1"}), "jobId": "job-1"}
+        old_image = {"metadata": json.dumps({"orderId": "ORD-1"}), "jobId": "job-1", "transferId": "xfer-1"}
 
         detect_orphan(mock_table, old_image, "job-1", mock_sns_client, "arn:aws:sns:us-east-1:123:topic", mock_cw_client)
 
@@ -71,11 +71,11 @@ class TestOrphanDetectionUnit:
         assert body["connector_id"] == "c-01234"
 
     def test_master_zero_per_file_records_is_orphan(self, mock_table, mock_sns_client, mock_cw_client):
-        """FILE_TRANSFER master with zero per-file records → orphan."""
+        """Master record (metadata, no eventResult, no transferId) with zero per-file records → orphan."""
         from orphan_detection import detect_orphan
 
         mock_table.query.return_value = {"Count": 0, "Items": []}
-        old_image = {"operationType": "FILE_TRANSFER", "jobId": "transfer-1"}
+        old_image = {"metadata": json.dumps({"orderId": "ORD-1"}), "jobId": "transfer-1"}
 
         detect_orphan(mock_table, old_image, "transfer-1", mock_sns_client, "arn:aws:sns:us-east-1:123:topic", mock_cw_client)
 
@@ -87,14 +87,14 @@ class TestOrphanDetectionUnit:
         mock_cw_client.put_metric_data.assert_called_once()
         mock_sns_client.publish.assert_called_once()
         body = json.loads(mock_sns_client.publish.call_args[1]["Message"])
-        assert body["orphan_type"] == "master-no-files"
+        assert body["orphan_type"] == "metadata-only"
 
     def test_master_with_per_file_records_is_ignored(self, mock_table, mock_sns_client, mock_cw_client):
-        """FILE_TRANSFER master with ≥1 per-file records → normal expiry."""
+        """Master record (metadata, no eventResult, no transferId) with ≥1 per-file records → normal expiry."""
         from orphan_detection import detect_orphan
 
         mock_table.query.return_value = {"Count": 1, "Items": [{"jobId": "file-1"}]}
-        old_image = {"operationType": "FILE_TRANSFER", "jobId": "transfer-1"}
+        old_image = {"metadata": json.dumps({"orderId": "ORD-1"}), "jobId": "transfer-1"}
 
         detect_orphan(mock_table, old_image, "transfer-1", mock_sns_client, "arn:aws:sns:us-east-1:123:topic", mock_cw_client)
 
@@ -140,13 +140,13 @@ class TestOrphanDetectionIntegration:
     """Integration tests via handler processing REMOVE records."""
 
     def test_remove_with_metadata_only_triggers_orphan(self, mock_table, mock_cloudwatch, mock_sns, monkeypatch):
-        """REMOVE record with metadata-only old image triggers orphan detection."""
+        """REMOVE record with metadata-only old image (per-file) triggers orphan detection."""
         monkeypatch.setenv("SNS_TOPIC_ARN", "arn:aws:sns:us-east-1:123:topic")
 
         import handler
         handler.SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:123:topic"
 
-        old_image = make_dynamo_image("job-int-1", metadata=SAMPLE_METADATA)
+        old_image = make_dynamo_image("job-int-1", metadata=SAMPLE_METADATA, transfer_id="xfer-1")
         stream_record = make_stream_record("REMOVE", "job-int-1", old_image=old_image)
         event = make_pipe_event(stream_record)
 

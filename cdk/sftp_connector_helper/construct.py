@@ -139,6 +139,13 @@ class SftpConnectorHelper(Construct):
                 resources=[self._table.table_arn],
             )
         )
+        event_writer_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["cloudwatch:PutMetricData"],
+                resources=["*"],
+                conditions={"StringEquals": {"cloudwatch:namespace": "SftpConnectorHelper"}},
+            )
+        )
 
         rule = events.Rule(
             self,
