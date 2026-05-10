@@ -4,9 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jcjorel.sftpconnectorhelper.SftpConnectorHelper;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.extension.ExtensionContext;
+import org.junit.jupiter.api.extension.TestWatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.regions.Region;
@@ -41,6 +45,7 @@ import static org.awaitility.Awaitility.await;
  * - Event polling utilities
  * - Orphaned test resource cleanup (prefix-based)
  */
+@ExtendWith(IntegrationTestBase.FailedTestRecordPreserver.class)
 public abstract class IntegrationTestBase {
 
     private static final Logger LOG = LoggerFactory.getLogger(IntegrationTestBase.class);
@@ -73,8 +78,14 @@ public abstract class IntegrationTestBase {
     private static String rawQueueArn;
     private static String defaultBusRuleName;
 
-    /** Job IDs to clean up from DynamoDB after all tests. */
+    /** Job IDs to clean up from DynamoDB after all tests (only from passing tests). */
     protected static final List<String> jobIdsToCleanup = new CopyOnWriteArrayList<>();
+
+    /** Job IDs associated with the currently running test. */
+    private static final List<String> currentTestJobIds = new CopyOnWriteArrayList<>();
+
+    /** Job IDs from failed tests — never cleaned up (preserved for debugging). */
+    protected static final Set<String> failedTestJobIds = ConcurrentHashMap.newKeySet();
 
     /** Queue URLs already deleted in this JVM session (SQS has 60s propagation delay). */
     private static final Set<String> deletedQueueUrls = ConcurrentHashMap.newKeySet();
@@ -82,6 +93,21 @@ public abstract class IntegrationTestBase {
     @BeforeEach
     void logTestEntry(TestInfo testInfo) {
         LOG.info(">>> Entering test: {}", testInfo.getDisplayName());
+        currentTestJobIds.clear();
+    }
+
+    /**
+     * JUnit 5 TestWatcher that preserves DynamoDB records from failed tests.
+     * On failure, moves currentTestJobIds into failedTestJobIds so teardown skips them.
+     */
+    static class FailedTestRecordPreserver implements TestWatcher {
+        @Override
+        public void testFailed(ExtensionContext context, Throwable cause) {
+            failedTestJobIds.addAll(currentTestJobIds);
+            LOG.error("Test '{}' failed — preserving {} DynamoDB record(s) for debugging (table={}): {}",
+                    context.getDisplayName(), currentTestJobIds.size(), TABLE_NAME,
+                    String.join(", ", currentTestJobIds));
+        }
     }
 
     @BeforeAll
@@ -237,17 +263,25 @@ public abstract class IntegrationTestBase {
 
     @AfterAll
     static void teardownInfrastructure() {
-        LOG.info("Tearing down test infrastructure. Cleaning {} DynamoDB records", jobIdsToCleanup.size());
+        int skipped = 0;
+        int deleted = 0;
 
-        // Cleanup DynamoDB records
+        // Cleanup DynamoDB records — skip those from failed tests
         for (String jobId : jobIdsToCleanup) {
+            if (failedTestJobIds.contains(jobId)) {
+                skipped++;
+                continue;
+            }
             try {
                 dynamoDb.deleteItem(DeleteItemRequest.builder()
                         .tableName(TABLE_NAME)
                         .key(Map.of("jobId", AttributeValue.builder().s(jobId).build()))
                         .build());
+                deleted++;
             } catch (Exception ignored) {}
         }
+        LOG.info("Tearing down test infrastructure. Deleted {} DynamoDB records, preserved {} from failed tests",
+                deleted, skipped);
 
         // Clean up all test resources (current session + any stragglers)
         cleanupOrphanedTestResources();
@@ -340,6 +374,7 @@ public abstract class IntegrationTestBase {
     /** Track a job ID for DynamoDB cleanup. */
     protected void trackForCleanup(String jobId) {
         jobIdsToCleanup.add(jobId);
+        currentTestJobIds.add(jobId);
     }
 
     /** Generate unique metadata JSON with a correlation ID. */
