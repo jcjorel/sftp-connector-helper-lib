@@ -209,7 +209,7 @@ Fan-out path (triggered by master record INSERT):
   "detail": {
     "transfer-id": "t-abc123",
     "connector-id": "c-1234567890abcdef0",
-    "batch-status": "ALL_COMPLETED",
+    "status-code": "ALL_COMPLETED",
     "file-count": 3,
     "completed-count": 3,
     "failed-count": 0,
@@ -245,7 +245,7 @@ Fan-out path (triggered by master record INSERT):
 }
 ```
 
-### `batch-status` Values
+### `status-code` Values (Batch Events)
 
 | Value | Condition |
 |-------|-----------|
@@ -365,7 +365,7 @@ The existing `_process_record` flow currently publishes enriched events uncondit
 ```python
 def lambda_handler(event, context):
     detail = event["detail"]
-    batch_status = detail["batch-status"]
+    batch_status = detail["status-code"]
     meta = detail["_helper_metadata"]
 
     if batch_status == "ALL_COMPLETED":

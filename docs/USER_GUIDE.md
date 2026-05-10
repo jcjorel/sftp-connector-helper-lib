@@ -175,7 +175,7 @@ When using `WHOLE_TRANSFER_COMPLETION_ONLY` or `INDIVIDUAL_AND_WHOLE_TRANSFER_CO
   "detail": {
     "transfer-id": "xfer-abc123",
     "connector-id": "c-1234567890abcdef0",
-    "batch-status": "ALL_COMPLETED",
+    "status-code": "ALL_COMPLETED",
     "file-count": 3,
     "completed-count": 3,
     "failed-count": 0,
@@ -200,7 +200,7 @@ When using `WHOLE_TRANSFER_COMPLETION_ONLY` or `INDIVIDUAL_AND_WHOLE_TRANSFER_CO
 - `SFTP Connector Whole File Send Transfer Completed - CUSTOM`
 - `SFTP Connector Whole File Retrieve Transfer Completed - CUSTOM`
 
-**`batch-status`** values:
+**`status-code`** values (batch events):
 | Value | Meaning |
 |-------|---------|
 | `ALL_COMPLETED` | Every file has `status-code: "COMPLETED"` |

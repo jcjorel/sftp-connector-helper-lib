@@ -67,13 +67,12 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
     // --- Generic timing harness ---
 
     private void assertStatusCompleted(JsonNode detail) {
-        // Batch completion events use "batch-status" instead of "status-code"
-        if (detail.has("batch-status")) {
-            String batchStatus = detail.path("batch-status").asText("");
-            assertEquals("ALL_COMPLETED", batchStatus,
-                    "Batch event failed with batch-status: " + batchStatus);
+        String status = detail.path("status-code").asText("");
+        // Batch completion events use ALL_COMPLETED; per-file events use COMPLETED
+        if (detail.has("file-count")) {
+            assertEquals("ALL_COMPLETED", status,
+                    "Batch event failed with status-code: " + status);
         } else {
-            String status = detail.path("status-code").asText("");
             assertEquals("COMPLETED", status,
                     "SFTP operation failed with status-code: " + status);
         }

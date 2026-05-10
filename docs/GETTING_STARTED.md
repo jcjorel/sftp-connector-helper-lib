@@ -464,7 +464,7 @@ Your consumer receives a single batch completion event:
   "detail": {
     "transfer-id": "t-batch456def789",
     "connector-id": "c-1234567890abcdef0",
-    "batch-status": "ALL_COMPLETED",
+    "status-code": "ALL_COMPLETED",
     "file-count": 3,
     "completed-count": 3,
     "failed-count": 0,

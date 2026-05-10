@@ -26,7 +26,7 @@ def should_publish_individual_event(master_record: dict | None) -> bool:
 
 
 def _derive_batch_status(file_statuses: dict) -> str:
-    """Derive batch-status from file statuses map."""
+    """Derive status-code from file statuses map."""
     statuses = {v.get("status") for v in file_statuses.values()}
     if statuses == {"COMPLETED"}:
         return "ALL_COMPLETED"
@@ -63,7 +63,7 @@ def _assemble_batch_event_detail(master_record: dict, file_statuses: dict) -> di
     return {
         "transfer-id": transfer_id,
         "connector-id": master_record.get("connectorId", "unknown"),
-        "batch-status": _derive_batch_status(real_statuses),
+        "status-code": _derive_batch_status(real_statuses),
         "file-count": len(files),
         "completed-count": completed,
         "failed-count": failed,
@@ -95,7 +95,7 @@ def _check_and_publish_batch(
     log_structured("INFO", "Publishing batch completion event",
                    transfer_id=master_item["jobId"],
                    file_count=len(file_statuses),
-                   batch_status=detail["batch-status"])
+                   batch_status=detail["status-code"])
 
     publish_batch_completion_event(events_client, bus_name, detail, detail_type)
 

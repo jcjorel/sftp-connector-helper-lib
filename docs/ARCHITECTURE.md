@@ -227,7 +227,7 @@ The event `source` is `"custom.sftp-connector-helper"` (same as individual enric
 {
   "transfer-id": "t-abc123",
   "connector-id": "c-1234567890abcdef0",
-  "batch-status": "ALL_COMPLETED",
+  "status-code": "ALL_COMPLETED",
   "file-count": 5,
   "completed-count": 5,
   "failed-count": 0,
@@ -239,7 +239,7 @@ The event `source` is `"custom.sftp-connector-helper"` (same as individual enric
 }
 ```
 
-**`batch-status` values**: `ALL_COMPLETED` | `ALL_FAILED` | `PARTIAL_FAILURE`
+**`status-code` values** (batch events): `ALL_COMPLETED` | `ALL_FAILED` | `PARTIAL_FAILURE`
 
 ### Idempotency
 

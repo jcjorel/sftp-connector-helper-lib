@@ -257,13 +257,13 @@ class MultiFileTransferIT extends IntegrationTestBase {
         assertEquals(1, batchEvents.size(), "Expected exactly 1 batch completion event");
 
         JsonNode batch = batchEvents.get(0);
-        assertEquals("ALL_COMPLETED", batch.get("batch-status").asText());
+        assertEquals("ALL_COMPLETED", batch.get("status-code").asText());
         assertEquals(FILE_COUNT, batch.get("file-count").asInt());
         assertEquals(FILE_COUNT, batch.get("completed-count").asInt());
         assertEquals(0, batch.get("failed-count").asInt());
         assertEnrichedMetadata(batch, metadata);
         assertEquals(FILE_COUNT, batch.get("files").size(), "files array must contain all " + FILE_COUNT + " entries");
-        LOG.info("Batch completion event validated: batch-status=ALL_COMPLETED, file-count={}", FILE_COUNT);
+        LOG.info("Batch completion event validated: status-code=ALL_COMPLETED, file-count={}", FILE_COUNT);
 
         // Assert no individual per-file events leaked
         List<JsonNode> individual = pollAndExpectNoEvents(
@@ -332,7 +332,7 @@ class MultiFileTransferIT extends IntegrationTestBase {
         assertEquals(1, batchEvents.size(), "Expected exactly 1 batch completion event");
 
         JsonNode batch = batchEvents.get(0);
-        assertEquals("ALL_COMPLETED", batch.get("batch-status").asText());
+        assertEquals("ALL_COMPLETED", batch.get("status-code").asText());
         assertEquals(FILE_COUNT, batch.get("file-count").asInt());
         assertEquals(FILE_COUNT, batch.get("completed-count").asInt());
         assertEquals(0, batch.get("failed-count").asInt());
@@ -400,7 +400,7 @@ class MultiFileTransferIT extends IntegrationTestBase {
         assertEquals(1, batchEvents.size(), "Expected exactly 1 batch completion event");
 
         JsonNode batch = batchEvents.get(0);
-        assertEquals("ALL_COMPLETED", batch.get("batch-status").asText());
+        assertEquals("ALL_COMPLETED", batch.get("status-code").asText());
         assertEquals(FILE_COUNT, batch.get("file-count").asInt());
         assertEnrichedMetadata(batch, metadata);
         LOG.info("Test PASSED: dual-emission — {} individual events + 1 batch event", FILE_COUNT);
