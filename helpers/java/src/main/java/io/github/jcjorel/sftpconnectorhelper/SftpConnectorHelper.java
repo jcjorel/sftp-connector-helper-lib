@@ -106,12 +106,35 @@ public final class SftpConnectorHelper implements AutoCloseable {
      * @throws IllegalArgumentException if request is null or metadata is invalid
      */
     public SftpOperationResult<StartFileTransferResponse> startFileTransfer(StartFileTransferRequest request, String metadata) {
+        return startFileTransfer(request, metadata, null);
+    }
+
+    /**
+     * Starts a file transfer with metadata correlation and event emission options.
+     * Uses staggered TTL (+3600s) since this creates the master fan-out record.
+     *
+     * <p>When {@code options} specifies a mode other than {@link EventEmissionMode#INDIVIDUAL_FILE_EVENTS_ONLY},
+     * batch-tracking fields ({@code emissionMode}, {@code expectedFiles}, {@code transferDirection})
+     * are written atomically with the metadata to the master DynamoDB record.</p>
+     *
+     * @param request  the StartFileTransfer SDK request
+     * @param metadata the business metadata JSON string to correlate
+     * @param options  event emission options, or {@code null} for default behavior
+     * @return the operation result indicating success or specific failure mode
+     * @throws IllegalArgumentException if request is null or metadata is invalid
+     */
+    public SftpOperationResult<StartFileTransferResponse> startFileTransfer(StartFileTransferRequest request, String metadata, FileTransferOptions options) {
         if (request == null) {
             throw new IllegalArgumentException("StartFileTransferRequest must not be null");
         }
         validateMetadata(metadata);
         StartFileTransferResponse response = transferClient.startFileTransfer(request);
-        return writeMetadataAndReturn(response, response.transferId(), metadata, true);
+
+        EventEmissionMode mode = (options != null) ? options.emissionMode() : EventEmissionMode.INDIVIDUAL_FILE_EVENTS_ONLY;
+        if (mode == EventEmissionMode.INDIVIDUAL_FILE_EVENTS_ONLY) {
+            return writeMetadataAndReturn(response, response.transferId(), metadata, true);
+        }
+        return writeMetadataWithBatchFields(response, response.transferId(), metadata, request, mode);
     }
 
     /**
@@ -182,6 +205,43 @@ public final class SftpConnectorHelper implements AutoCloseable {
                 .expressionAttributeValues(Map.of(
                         ":m", AttributeValue.builder().s(metadata).build(),
                         ":t", AttributeValue.builder().n(String.valueOf(ttlEpochSeconds)).build()
+                ))
+                .conditionExpression("attribute_not_exists(metadata)")
+                .build();
+
+        try {
+            dynamoDbClient.updateItem(updateRequest);
+            return new SftpOperationResult.Success<>(response);
+        } catch (ConditionalCheckFailedException e) {
+            return new SftpOperationResult.MetadataAlreadyExists<>(response, jobId);
+        } catch (DynamoDbException e) {
+            return new SftpOperationResult.MetadataWriteFailed<>(response, jobId, e);
+        }
+    }
+
+    private SftpOperationResult<StartFileTransferResponse> writeMetadataWithBatchFields(
+            StartFileTransferResponse response, String jobId, String metadata,
+            StartFileTransferRequest request, EventEmissionMode mode) {
+        if (jobId == null || jobId.isEmpty()) {
+            throw new IllegalStateException("SDK response returned null or empty job ID");
+        }
+        long ttlEpochSeconds = Instant.now().getEpochSecond() + ttlDuration.toSeconds() + 3600;
+
+        boolean isSend = request.hasSendFilePaths() && !request.sendFilePaths().isEmpty();
+        String transferDirection = isSend ? "SEND" : "RETRIEVE";
+        int expectedFiles = isSend ? request.sendFilePaths().size() : request.retrieveFilePaths().size();
+
+        UpdateItemRequest updateRequest = UpdateItemRequest.builder()
+                .tableName(tableName)
+                .key(Map.of("jobId", AttributeValue.builder().s(jobId).build()))
+                .updateExpression("SET metadata = :m, #t = :t, emissionMode = :em, expectedFiles = :ef, transferDirection = :td")
+                .expressionAttributeNames(Map.of("#t", "ttl"))
+                .expressionAttributeValues(Map.of(
+                        ":m", AttributeValue.builder().s(metadata).build(),
+                        ":t", AttributeValue.builder().n(String.valueOf(ttlEpochSeconds)).build(),
+                        ":em", AttributeValue.builder().s(mode.name()).build(),
+                        ":ef", AttributeValue.builder().n(String.valueOf(expectedFiles)).build(),
+                        ":td", AttributeValue.builder().s(transferDirection).build()
                 ))
                 .conditionExpression("attribute_not_exists(metadata)")
                 .build();

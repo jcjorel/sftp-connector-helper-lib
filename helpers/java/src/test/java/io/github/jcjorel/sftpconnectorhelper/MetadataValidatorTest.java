@@ -94,30 +94,30 @@ class MetadataValidatorTest {
     }
 
     @Test
-    @DisplayName("Exactly 25,000 bytes passes validation (boundary inclusive)")
-    void exactly25000BytesPasses() {
-        // {"x":"<filler>"} = 8 bytes overhead, need 24,992 filler chars
-        String filler = "a".repeat(24_992);
+    @DisplayName("Exactly 8,000 bytes passes validation (boundary inclusive)")
+    void exactly8000BytesPasses() {
+        // {"x":"<filler>"} = 8 bytes overhead, need 7,992 filler chars
+        String filler = "a".repeat(7_992);
         String metadata = "{\"x\":\"" + filler + "\"}";
-        assertEquals(25_000, metadata.getBytes(StandardCharsets.UTF_8).length);
+        assertEquals(8_000, metadata.getBytes(StandardCharsets.UTF_8).length);
         assertDoesNotThrow(() -> MetadataValidator.validate(metadata));
     }
 
     @Test
-    @DisplayName("25,001 bytes throws with correct message format")
-    void exceeding25000BytesThrows() {
-        String filler = "a".repeat(24_993);
+    @DisplayName("8,001 bytes throws with correct message format")
+    void exceeding8000BytesThrows() {
+        String filler = "a".repeat(7_993);
         String metadata = "{\"x\":\"" + filler + "\"}";
-        assertEquals(25_001, metadata.getBytes(StandardCharsets.UTF_8).length);
+        assertEquals(8_001, metadata.getBytes(StandardCharsets.UTF_8).length);
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> MetadataValidator.validate(metadata));
-        assertEquals("Metadata size (25001 bytes) exceeds maximum allowed size (25000 bytes)", ex.getMessage());
+        assertEquals("Metadata size (8001 bytes) exceeds maximum allowed size (8000 bytes)", ex.getMessage());
     }
 
     @Test
     @DisplayName("Error message for oversized includes actual byte count")
     void oversizedMessageIncludesActualByteCount() {
-        String filler = "a".repeat(25_000);
+        String filler = "a".repeat(8_000);
         String metadata = "{\"x\":\"" + filler + "\"}";
         int expectedBytes = metadata.getBytes(StandardCharsets.UTF_8).length;
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,

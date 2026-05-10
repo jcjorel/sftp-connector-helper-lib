@@ -157,4 +157,100 @@ class SftpConnectorHelperTest {
         assertEquals(METADATA, captured.expressionAttributeValues().get(":m").s());
         assertNotNull(captured.expressionAttributeValues().get(":t").n());
     }
+
+    @Test
+    void startFileTransfer_withBatchOptions_writesBatchFieldsForSend() {
+        StartFileTransferRequest multiFileRequest = StartFileTransferRequest.builder()
+                .connectorId("c-123")
+                .sendFilePaths("/a.csv", "/b.csv", "/c.csv")
+                .build();
+        StartFileTransferResponse response = StartFileTransferResponse.builder()
+                .transferId(TRANSFER_ID)
+                .build();
+        when(transferClient.startFileTransfer(multiFileRequest)).thenReturn(response);
+
+        FileTransferOptions options = FileTransferOptions.builder()
+                .emissionMode(EventEmissionMode.INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION)
+                .build();
+        SftpOperationResult<StartFileTransferResponse> result = helper.startFileTransfer(multiFileRequest, METADATA, options);
+
+        assertInstanceOf(SftpOperationResult.Success.class, result);
+        ArgumentCaptor<UpdateItemRequest> captor = ArgumentCaptor.forClass(UpdateItemRequest.class);
+        verify(dynamoDbClient).updateItem(captor.capture());
+        UpdateItemRequest captured = captor.getValue();
+
+        assertTrue(captured.updateExpression().contains("emissionMode = :em"));
+        assertTrue(captured.updateExpression().contains("expectedFiles = :ef"));
+        assertTrue(captured.updateExpression().contains("transferDirection = :td"));
+        assertEquals("INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION", captured.expressionAttributeValues().get(":em").s());
+        assertEquals("3", captured.expressionAttributeValues().get(":ef").n());
+        assertEquals("SEND", captured.expressionAttributeValues().get(":td").s());
+    }
+
+    @Test
+    void startFileTransfer_withBatchOptions_writesBatchFieldsForRetrieve() {
+        StartFileTransferRequest retrieveRequest = StartFileTransferRequest.builder()
+                .connectorId("c-123")
+                .retrieveFilePaths("/x.csv", "/y.csv")
+                .build();
+        StartFileTransferResponse response = StartFileTransferResponse.builder()
+                .transferId(TRANSFER_ID)
+                .build();
+        when(transferClient.startFileTransfer(retrieveRequest)).thenReturn(response);
+
+        FileTransferOptions options = FileTransferOptions.builder()
+                .emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY)
+                .build();
+        helper.startFileTransfer(retrieveRequest, METADATA, options);
+
+        ArgumentCaptor<UpdateItemRequest> captor = ArgumentCaptor.forClass(UpdateItemRequest.class);
+        verify(dynamoDbClient).updateItem(captor.capture());
+        UpdateItemRequest captured = captor.getValue();
+
+        assertEquals("WHOLE_TRANSFER_COMPLETION_ONLY", captured.expressionAttributeValues().get(":em").s());
+        assertEquals("2", captured.expressionAttributeValues().get(":ef").n());
+        assertEquals("RETRIEVE", captured.expressionAttributeValues().get(":td").s());
+    }
+
+    @Test
+    void startFileTransfer_withNullOptions_noBatchFields() {
+        StartFileTransferResponse response = StartFileTransferResponse.builder()
+                .transferId(TRANSFER_ID)
+                .build();
+        when(transferClient.startFileTransfer(sdkRequest)).thenReturn(response);
+
+        helper.startFileTransfer(sdkRequest, METADATA, null);
+
+        ArgumentCaptor<UpdateItemRequest> captor = ArgumentCaptor.forClass(UpdateItemRequest.class);
+        verify(dynamoDbClient).updateItem(captor.capture());
+        UpdateItemRequest captured = captor.getValue();
+
+        assertEquals("SET metadata = :m, #t = :t", captured.updateExpression());
+        assertNull(captured.expressionAttributeValues().get(":em"));
+    }
+
+    @Test
+    void startFileTransfer_withDefaultOptions_noBatchFields() {
+        StartFileTransferResponse response = StartFileTransferResponse.builder()
+                .transferId(TRANSFER_ID)
+                .build();
+        when(transferClient.startFileTransfer(sdkRequest)).thenReturn(response);
+
+        helper.startFileTransfer(sdkRequest, METADATA, FileTransferOptions.defaults());
+
+        ArgumentCaptor<UpdateItemRequest> captor = ArgumentCaptor.forClass(UpdateItemRequest.class);
+        verify(dynamoDbClient).updateItem(captor.capture());
+        UpdateItemRequest captured = captor.getValue();
+
+        assertEquals("SET metadata = :m, #t = :t", captured.updateExpression());
+        assertNull(captured.expressionAttributeValues().get(":em"));
+    }
+
+    @Test
+    void startFileTransfer_metadataExceeds8KB_throwsIllegalArgumentException() {
+        String largeMetadata = "{\"data\":\"" + "x".repeat(8000) + "\"}";
+        assertThrows(IllegalArgumentException.class,
+                () -> helper.startFileTransfer(sdkRequest, largeMetadata));
+        verify(transferClient, never()).startFileTransfer(any(StartFileTransferRequest.class));
+    }
 }

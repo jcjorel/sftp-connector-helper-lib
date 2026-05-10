@@ -13,7 +13,7 @@ import java.nio.charset.StandardCharsets;
  */
 public final class MetadataValidator {
 
-    private static final int MAX_METADATA_BYTES = 25_000;
+    private static final int MAX_METADATA_BYTES = 8_000;
     private static final int MAX_NESTING_DEPTH = 50;
     private static final ObjectMapper OBJECT_MAPPER = createObjectMapper();
 
