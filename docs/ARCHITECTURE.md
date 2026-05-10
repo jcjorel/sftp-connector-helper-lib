@@ -23,7 +23,7 @@ The SFTP Connector Helper framework correlates business metadata with AWS Transf
                  │ DynamoDB Streams (NEW_AND_OLD_IMAGES)
                  ▼
 ┌──────────────────────────────────┐
-│  EventBridge Pipe (batch_size=1) │
+│  EventBridge Pipe (batch_size=4) │
 └────────────────┬─────────────────┘
                  ▼
 ┌──────────────────────────────────┐        ┌─────────────────────────┐
@@ -81,7 +81,7 @@ When a DynamoDB item expires (TTL REMOVE event), the Joiner evaluates four branc
 | `ttl_duration` | `Duration` | 1 day | TTL for DynamoDB records |
 | `event_writer_memory` | `int` | 256 | Event Writer Lambda memory (MB) |
 | `event_writer_timeout` | `Duration` | 30s | Event Writer Lambda timeout |
-| `joiner_memory` | `int` | 256 | Joiner Lambda memory (MB) |
+| `joiner_memory` | `int` | 512 | Joiner Lambda memory (MB) |
 | `joiner_timeout` | `Duration` | 30s | Joiner Lambda timeout |
 | `event_bus_log_level` | `str \| None` | `"INFO"` | Bus log level; ignored when `existing_bus_arn` is set. When enabled, full event detail is included in logs (cost and data-sensitivity implications). |
 
@@ -174,6 +174,78 @@ All metrics are emitted to namespace `SftpConnectorHelper`:
 | **PipeDLQ** (`sftp-connector-helper-pipe-dlq`) | DynamoDB Streams → EventBridge Pipe | Joiner Lambda invocation fails after 3 retries or 1-hour record age (whichever comes first) |
 
 Both queues use default SQS retention (4 days). Messages contain the original event payload for replay or inspection.
+
+## Whole Transfer Completion (Batch Tracking)
+
+The framework supports a batch-level completion signal for multi-file transfers via `FileTransferOptions`. This eliminates the need for consumers to track per-file completion counts.
+
+### Emission Modes
+
+| Mode | Individual per-file events | Batch completion event |
+|------|---------------------------|----------------------|
+| `INDIVIDUAL_FILE_EVENTS_ONLY` | ✓ Published | ✗ Not published |
+| `WHOLE_TRANSFER_COMPLETION_ONLY` | ✗ Suppressed | ✓ Published |
+| `INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION` | ✓ Published | ✓ Published |
+
+### Additional DynamoDB Attributes (Master Record)
+
+When `emissionMode` ≠ `INDIVIDUAL_FILE_EVENTS_ONLY`, the Java helper writes these additional attributes atomically with the metadata:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `emissionMode` | String | One of the three mode values above |
+| `expectedFiles` | Number | Count of files in the transfer (from `sendFilePaths` or `retrieveFilePaths` size) |
+| `transferDirection` | String | `"SEND"` or `"RETRIEVE"` — determines batch event detail-type |
+| `connectorId` | String | Connector ID (extracted from master record context) |
+| `fileStatuses` | Map | Per-file completion tracking map (keyed by SHA-256 hash of `file-transfer-id`) |
+| `resolvedCount` | Number | Atomic counter of resolved files (incremented via `ADD`) |
+| `batchEventPublished` | Boolean | Deduplication marker — prevents duplicate batch events |
+
+### Batch Tracking Data Flow
+
+1. **Java helper** writes master record with `emissionMode`, `expectedFiles`, `transferDirection`, and an initialized `fileStatuses` map.
+2. **Joiner Lambda** processes each per-file stream event. When it detects the master has `expectedFiles` set:
+   - Conditionally updates `fileStatuses` map with file status (uses `attribute_not_exists` to prevent double-counting)
+   - Atomically increments `resolvedCount`
+   - Checks `should_publish_individual_event(master)` — suppresses individual enriched events when mode is `WHOLE_TRANSFER_COMPLETION_ONLY`
+3. **Batch guard** (`_check_and_publish_batch`): after each file resolution, checks if `resolvedCount == expectedFiles` and `batchEventPublished == false`. If both conditions met, assembles and publishes the batch completion event, then sets `batchEventPublished = true` as a best-effort dedup marker.
+
+### Batch Completion Event Types
+
+These are custom events produced by the Joiner (not Transfer Family events):
+
+| detail-type | Trigger |
+|-------------|---------|
+| `SFTP Connector Whole File Send Transfer Completed - CUSTOM` | All files in a send transfer resolved |
+| `SFTP Connector Whole File Retrieve Transfer Completed - CUSTOM` | All files in a retrieve transfer resolved |
+
+The event `source` is `"custom.sftp-connector-helper"` (same as individual enriched events).
+
+### Batch Event Detail Structure
+
+```json
+{
+  "transfer-id": "t-abc123",
+  "connector-id": "c-1234567890abcdef0",
+  "batch-status": "ALL_COMPLETED",
+  "file-count": 5,
+  "completed-count": 5,
+  "failed-count": 0,
+  "_helper_metadata": { "batchId": "BATCH-001" },
+  "files": [
+    { "file-transfer-id": "ft-1", "status-code": "COMPLETED", "file-path": "/uploads/file1.csv", "_helper_metadata": {...} },
+    ...
+  ]
+}
+```
+
+**`batch-status` values**: `ALL_COMPLETED` | `ALL_FAILED` | `PARTIAL_FAILURE`
+
+### Idempotency
+
+- Per-file tracking uses `attribute_not_exists(#fs.#ftId)` condition — duplicate file events are safely ignored.
+- On duplicate, the Joiner re-reads the master record and re-evaluates the batch guard (handles race conditions).
+- `batchEventPublished` marker prevents duplicate batch events (best-effort — at-least-once delivery is possible in edge cases).
 
 ## Limitations
 

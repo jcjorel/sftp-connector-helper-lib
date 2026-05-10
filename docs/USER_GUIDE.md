@@ -2,6 +2,8 @@
 
 ## Java API Reference
 
+> **New to the library?** Start with the [Getting Started tutorial](GETTING_STARTED.md) for hands-on scenarios before diving into the full API reference.
+
 ### Builder
 
 ```java
@@ -30,6 +32,35 @@ All operations follow the same pattern: validate metadata (throws `IllegalArgume
 
 > **Note**: `startFileTransfer` handles multi-file fan-out automatically. See [Architecture — Fan-Out Path](ARCHITECTURE.md#fan-out-path-multi-file-transfer) for internal details.
 
+### Batch Completion Events (FileTransferOptions)
+
+For multi-file transfers, you can receive a single "all done" event instead of (or in addition to) individual per-file events:
+
+```java
+FileTransferOptions options = FileTransferOptions.builder()
+    .emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY)
+    .build();
+
+SftpOperationResult<StartFileTransferResponse> result =
+    helper.startFileTransfer(request, metadata, options);
+```
+
+The `startFileTransfer` method accepts an optional third parameter:
+
+| Method | SDK Request Type | Returns |
+|--------|-----------------|---------|
+| `startFileTransfer(request, metadata, options)` | `StartFileTransferRequest` | `SftpOperationResult<StartFileTransferResponse>` |
+
+**`EventEmissionMode`** controls which events are published:
+
+| Mode | Behavior |
+|------|----------|
+| `INDIVIDUAL_FILE_EVENTS_ONLY` | Default. One enriched event per file (backward-compatible). |
+| `WHOLE_TRANSFER_COMPLETION_ONLY` | Single batch completion event when all files complete. No per-file events. |
+| `INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION` | Both per-file events and a batch completion event. |
+
+Passing `null` for `options` (or using the 2-arg overload) is equivalent to `INDIVIDUAL_FILE_EVENTS_ONLY`.
+
 ### Result Types
 
 ```java
@@ -49,7 +80,7 @@ sealed interface SftpOperationResult<T> {
 Metadata must be a valid JSON **object** (not array, not primitive).
 
 Constraints:
-- Maximum size: **25,000 bytes** (25 KB). Exceeding this throws `IllegalArgumentException`.
+- Maximum size: **8,000 bytes** (8 KB). Exceeding this throws `IllegalArgumentException`.
 - Maximum JSON nesting depth: **50 levels**.
 - Must not be `null`, empty, an array, or a primitive.
 
@@ -132,6 +163,49 @@ Events are published to the dedicated bus with:
 ```
 
 > **Note**: The `detail-type` preserves the original Transfer Family value (e.g., `"SFTP Connector File Send Completed"`, `"SFTP Connector File Retrieve Completed"`, `"SFTP Connector Directory Listing Completed"`). Use prefix matching in your rules to catch both success and failure events.
+
+### Batch Completion Event Format
+
+When using `WHOLE_TRANSFER_COMPLETION_ONLY` or `INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION`, a single batch event is published once all files in the transfer complete:
+
+```json
+{
+  "source": "custom.sftp-connector-helper",
+  "detail-type": "SFTP Connector Whole File Send Transfer Completed - CUSTOM",
+  "detail": {
+    "transfer-id": "xfer-abc123",
+    "connector-id": "c-1234567890abcdef0",
+    "batch-status": "ALL_COMPLETED",
+    "file-count": 3,
+    "completed-count": 3,
+    "failed-count": 0,
+    "_helper_metadata": {
+      "orderId": "ORD-001",
+      "customer": "ACME"
+    },
+    "files": [
+      {
+        "connector-id": "c-1234567890abcdef0",
+        "transfer-id": "xfer-abc123",
+        "status-code": "COMPLETED",
+        "file-path": "/outbound/invoice-001.csv",
+        "_helper_metadata": { "orderId": "ORD-001", "customer": "ACME" }
+      }
+    ]
+  }
+}
+```
+
+**Detail-types** for batch events:
+- `SFTP Connector Whole File Send Transfer Completed - CUSTOM`
+- `SFTP Connector Whole File Retrieve Transfer Completed - CUSTOM`
+
+**`batch-status`** values:
+| Value | Meaning |
+|-------|---------|
+| `ALL_COMPLETED` | Every file has `status-code: "COMPLETED"` |
+| `ALL_FAILED` | Every file has a non-COMPLETED status |
+| `PARTIAL_FAILURE` | Mix of completed and failed files |
 
 ### EventBridge Rule (CDK)
 

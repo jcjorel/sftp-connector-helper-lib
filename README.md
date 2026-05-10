@@ -33,6 +33,7 @@ This library solves all of that with a single CDK construct and a thin Java wrap
 - Python 3.12+ with `uv` package manager
 - Java 21+ with Maven
 - AWS CLI v2 configured with a named profile
+- IAM permissions for your application: `transfer:Start*` on your connector + `dynamodb:UpdateItem` on the helper table (see [User Guide — IAM Permissions](docs/USER_GUIDE.md#iam-permissions-required-by-caller))
 
 ### Deploy
 
@@ -45,6 +46,7 @@ make deploy AWS_PROFILE=my-profile AWS_REGION=eu-central-1
 
 ```java
 import io.github.jcjorel.sftpconnectorhelper.*;
+import software.amazon.awssdk.services.transfer.model.*;
 
 try (SftpConnectorHelper helper = SftpConnectorHelper.builder().build()) {
 
@@ -72,14 +74,26 @@ Your consumer receives the original Transfer Family event enriched with your met
 
 The helper adds a single metadata write per operation (~5–10 ms typical). End-to-end latency overhead is dominated by SFTP Connector variance, not the metadata write:
 
-| Operation | Direct (min / **mean** / max) | Helper (min / **mean** / max) | Overhead (min / **mean** / max) |
-|-----------|-------------------------------|-------------------------------|-------------------------------|
-| StartFileTransfer | 1263 / **1585** / 2036 ms | 1432 / **2024** / 3129 ms | −339 / **+438** / +1341 ms |
-| StartDirectoryListing | 651 / **1381** / 2338 ms | 1097 / **1760** / 2192 ms | −830 / **+379** / +1390 ms |
-| StartRemoteMove | 481 / **1549** / 2453 ms | 867 / **1227** / 1374 ms | −1410 / **−322** / +866 ms |
-| StartRemoteDelete | 716 / **1178** / 2232 ms | 904 / **1492** / 2133 ms | −605 / **+314** / +1136 ms |
-| MultiFileSend (10 files) | 4256 / **6060** / 8949 ms | 5184 / **5531** / 5857 ms | −3220 / **−528** / +1601 ms |
-| MultiFileRetrieve (10 files) | 2936 / **4240** / 5206 ms | 3863 / **4701** / 5341 ms | +91 / **+461** / +1366 ms |
+| Operation | Description | Direct (min / **mean** / max) | Helper (min / **mean** / max) | Overhead (min / **mean** / max) |
+|-----------|-------------|-------------------------------|-------------------------------|-------------------------------|
+| SingleFileSend | Send one file to the remote SFTP server | 518 / **1374** / 2946 ms | 1482 / **2209** / 3035 ms | −106 / **+835** / +1847 ms |
+| SingleFileRetrieve | Retrieve one file from the remote SFTP server | 507 / **1236** / 1523 ms | 1675 / **2316** / 3169 ms | +194 / **+1079** / +2662 ms |
+| StartDirectoryListing | List remote directory contents | 648 / **1847** / 5056 ms | 1182 / **1838** / 2165 ms | −2891 / **−9** / +1365 ms |
+| StartRemoteMove | Move/rename a file on the remote server | 512 / **1020** / 2246 ms | 827 / **1487** / 2813 ms | +211 / **+466** / +894 ms |
+| StartRemoteDelete | Delete a file on the remote server | 439 / **1083** / 2287 ms | 764 / **1278** / 1903 ms | −384 / **+195** / +771 ms |
+| MultiFileSend (10 files) | Send 10 files, one enriched event per file | 4027 / **5598** / 8899 ms | 5246 / **5560** / 5871 ms | −3108 / **−38** / +1219 ms |
+| MultiFileSend-WholeOnly (10 files) | Send 10 files, single batch-completion event | 4027 / **5598** / 8899 ms | 5514 / **6012** / 6676 ms | −2223 / **+414** / +2298 ms |
+| MultiFileSend-Ind+Whole (10 files) | Send 10 files, per-file + batch-completion events | 4027 / **5598** / 8899 ms | 5688 / **5913** / 6282 ms | −3090 / **+314** / +1746 ms |
+| MultiFileRetrieve (10 files) | Retrieve 10 files, one enriched event per file | 3817 / **4897** / 5357 ms | 4051 / **5824** / 7988 ms | +213 / **+926** / +2631 ms |
+| MultiFileRetrieve-WholeOnly (10 files) | Retrieve 10 files, single batch-completion event | 3817 / **4897** / 5357 ms | 4301 / **5093** / 6135 ms | −583 / **+195** / +941 ms |
+| MultiFileRetrieve-Ind+Whole (10 files) | Retrieve 10 files, per-file + batch-completion events | 3817 / **4897** / 5357 ms | 4475 / **5213** / 6071 ms | −194 / **+315** / +834 ms |
+
+**Key takeaways** (5 iterations per operation):
+
+- **Overhead is noise-dominated** — negative overhead values in several runs confirm that SFTP Connector variance far exceeds the helper's added latency.
+- **Directory listing and multi-file sends show near-zero mean overhead** (−9 ms and −38 ms respectively), meaning the metadata write is fully amortized.
+- **Single-file operations** add ~835–1079 ms mean overhead, largely due to the enriched event pipeline (DynamoDB stream → Lambda joiner → EventBridge) rather than the metadata write itself.
+- **Batch-completion mode** (`WholeOnly`, `Ind+Whole`) adds minimal cost over per-file mode while providing a single "all done" signal for fan-out workflows.
 
 Run the benchmark: `make test-integration AWS_PROFILE=<profile> AWS_REGION=<region>`
 
@@ -106,8 +120,10 @@ Run the benchmark: `make test-integration AWS_PROFILE=<profile> AWS_REGION=<regi
 | `make build` | Build Java library + Lambda packages |
 | `make deploy AWS_PROFILE=x AWS_REGION=y` | Build + deploy to specified region |
 | `make destroy AWS_PROFILE=x AWS_REGION=y` | Tear down the deployed stack |
+| `make bootstrap AWS_PROFILE=x AWS_REGION=y` | One-time CDK bootstrap in target region |
 | `make test` | Run Java unit tests |
 | `make test-integration` | Run integration tests (requires deployed stack) |
+| `make clean` | Remove Java build artifacts |
 
 ## Documentation
 

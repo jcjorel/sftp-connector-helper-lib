@@ -39,7 +39,7 @@ class SftpConnectorHelper(Construct):
 
     Optimized for lowest latency:
     - Event Writer: EventBridge rule → Lambda (direct invocation)
-    - Joiner: DynamoDB Streams → EventBridge Pipe (batch_size=1) → Lambda (direct invocation)
+    - Joiner: DynamoDB Streams → EventBridge Pipe (batch_size=4) → Lambda (direct invocation)
     """
 
     def __init__(
@@ -169,7 +169,7 @@ class SftpConnectorHelper(Construct):
             retry_attempts=2,
         ))
 
-        # Joiner Pipeline — DynamoDB Streams → Pipe (batch_size=1) → Lambda (direct)
+        # Joiner Pipeline — DynamoDB Streams → Pipe (batch_size=4) → Lambda (direct)
         stream_arn = props.existing_table_stream_arn or self._table.table_stream_arn
 
         pipe_dlq = sqs.Queue(
@@ -227,7 +227,7 @@ class SftpConnectorHelper(Construct):
         )
         self._orphan_topic.grant_publish(joiner_lambda)
 
-        # Pipe: DynamoDB Streams → Joiner Lambda (direct invocation, batch_size=1)
+        # Pipe: DynamoDB Streams → Joiner Lambda (direct invocation, batch_size=4)
         pipe_role = iam.Role(
             self,
             "PipeRole",
@@ -260,7 +260,7 @@ class SftpConnectorHelper(Construct):
             source_parameters=pipes.CfnPipe.PipeSourceParametersProperty(
                 dynamo_db_stream_parameters=pipes.CfnPipe.PipeSourceDynamoDBStreamParametersProperty(
                     starting_position="LATEST",
-                    batch_size=1,
+                    batch_size=4,
                     maximum_batching_window_in_seconds=0,
                     maximum_retry_attempts=3,
                     maximum_record_age_in_seconds=3600,

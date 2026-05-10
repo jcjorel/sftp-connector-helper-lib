@@ -1,6 +1,8 @@
 package io.github.jcjorel.sftpconnectorhelper.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.github.jcjorel.sftpconnectorhelper.EventEmissionMode;
+import io.github.jcjorel.sftpconnectorhelper.FileTransferOptions;
 import io.github.jcjorel.sftpconnectorhelper.SftpOperationResult;
 import org.junit.jupiter.api.*;
 import org.slf4j.Logger;
@@ -65,9 +67,16 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
     // --- Generic timing harness ---
 
     private void assertStatusCompleted(JsonNode detail) {
-        String status = detail.path("status-code").asText("");
-        assertEquals("COMPLETED", status,
-                "SFTP operation failed with status-code: " + status);
+        // Batch completion events use "batch-status" instead of "status-code"
+        if (detail.has("batch-status")) {
+            String batchStatus = detail.path("batch-status").asText("");
+            assertEquals("ALL_COMPLETED", batchStatus,
+                    "Batch event failed with batch-status: " + batchStatus);
+        } else {
+            String status = detail.path("status-code").asText("");
+            assertEquals("COMPLETED", status,
+                    "SFTP operation failed with status-code: " + status);
+        }
     }
 
     private long timeDirect(Supplier<String> call, String idField, int count, Duration timeout) {
@@ -167,11 +176,11 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
         cleanupS3(key);
     }
 
-    // --- 4 single-operation benchmarks ---
+    // --- 5 single-operation benchmarks ---
 
     @Test @Order(1)
-    void benchmarkFileTransfer() {
-        runBenchmark("StartFileTransfer", THROTTLE_MS, i -> {
+    void benchmarkSingleFileSend() {
+        runBenchmark("SingleFileSend", THROTTLE_MS, i -> {
             String uid = UUID.randomUUID().toString().substring(0, 8);
 
             String dKey = "benchmark/ft-d-" + uid + ".txt";
@@ -197,6 +206,37 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
     }
 
     @Test @Order(2)
+    void benchmarkSingleFileRetrieve() {
+        runBenchmark("SingleFileRetrieve", THROTTLE_MS, i -> {
+            String uid = UUID.randomUUID().toString().substring(0, 8);
+
+            // Setup: send a file to remote server
+            String setupKey = "benchmark/fr-setup-" + uid + ".txt";
+            setupRemoteFile(setupKey);
+            String remotePath = REMOTE_DIR + "/fr-setup-" + uid + ".txt";
+            throttleGuard(THROTTLE_MS);
+
+            // Direct
+            String dLocalDir = "/" + TEST_S3_BUCKET + "/benchmark/fr-d-" + uid;
+            long directMs = timeDirect(
+                    () -> transferClient.startFileTransfer(ftRetrieveReq(List.of(remotePath), dLocalDir)).transferId(),
+                    "transfer-id", 1, POLL_TIMEOUT);
+            cleanupS3Prefix("benchmark/fr-d-" + uid);
+
+            throttleGuard(THROTTLE_MS);
+
+            // Helper
+            String hLocalDir = "/" + TEST_S3_BUCKET + "/benchmark/fr-h-" + uid;
+            long helperMs = timeHelper(
+                    () -> helper.startFileTransfer(ftRetrieveReq(List.of(remotePath), hLocalDir), testMetadata("bench-fr")),
+                    StartFileTransferResponse::transferId, "transfer-id", 1, POLL_TIMEOUT);
+            cleanupS3Prefix("benchmark/fr-h-" + uid);
+
+            return new TimingSample(directMs, helperMs);
+        });
+    }
+
+    @Test @Order(3)
     void benchmarkDirectoryListing() {
         runBenchmark("StartDirectoryListing", THROTTLE_MS, i -> {
             long directMs = timeDirect(
@@ -213,7 +253,7 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
         });
     }
 
-    @Test @Order(3)
+    @Test @Order(4)
     void benchmarkRemoteMove() {
         runBenchmark("StartRemoteMove", THROTTLE_MS, i -> {
             String uid = UUID.randomUUID().toString().substring(0, 8);
@@ -236,7 +276,7 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
         });
     }
 
-    @Test @Order(4)
+    @Test @Order(5)
     void benchmarkRemoteDelete() {
         runBenchmark("StartRemoteDelete", THROTTLE_MS, i -> {
             String uid = UUID.randomUUID().toString().substring(0, 8);
@@ -261,66 +301,140 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
 
     // --- 2 multi-file benchmarks ---
 
-    @Test @Order(5)
+    @Test @Order(6)
     void benchmarkMultiFileSend() {
-        runBenchmark("MultiFileSend(10)", LONG_THROTTLE_MS, i -> {
-            String uid = UUID.randomUUID().toString().substring(0, 8);
+        List<TimingSample> defaultSamples = new ArrayList<>();
+        List<TimingSample> wholeOnlySamples = new ArrayList<>();
+        List<TimingSample> indWholeSamples = new ArrayList<>();
 
-            FileSet d = prepareFiles("ms-d", uid);
-            throttleGuard(LONG_THROTTLE_MS);
-            long directMs = timeDirect(
-                    () -> transferClient.startFileTransfer(ftMultiSendReq(d.s3Paths())).transferId(),
-                    "transfer-id", MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
-            d.keys().forEach(this::cleanupS3);
+        try {
+            for (int i = 0; i < ITERATIONS; i++) {
+                String uid = UUID.randomUUID().toString().substring(0, 8);
 
-            throttleGuard(LONG_THROTTLE_MS);
+                // Shared direct baseline
+                FileSet d = prepareFiles("ms-d", uid);
+                throttleGuard(LONG_THROTTLE_MS);
+                long directMs = timeDirect(
+                        () -> transferClient.startFileTransfer(ftMultiSendReq(d.s3Paths())).transferId(),
+                        "transfer-id", MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
+                d.keys().forEach(this::cleanupS3);
 
-            FileSet h = prepareFiles("ms-h", uid);
-            throttleGuard(LONG_THROTTLE_MS);
-            long helperMs = timeHelper(
-                    () -> helper.startFileTransfer(ftMultiSendReq(h.s3Paths()), testMetadata("bench-multi-send")),
-                    StartFileTransferResponse::transferId, "transfer-id", MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
-            h.keys().forEach(this::cleanupS3);
+                // Variant 1: default (individual events only)
+                throttleGuard(LONG_THROTTLE_MS);
+                FileSet h1 = prepareFiles("ms-h1", uid);
+                throttleGuard(LONG_THROTTLE_MS);
+                long helper1Ms = timeHelper(
+                        () -> helper.startFileTransfer(ftMultiSendReq(h1.s3Paths()), testMetadata("bench-ms-default")),
+                        StartFileTransferResponse::transferId, "transfer-id", MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
+                h1.keys().forEach(this::cleanupS3);
+                defaultSamples.add(new TimingSample(directMs, helper1Ms));
+                LOG.info("[BENCHMARK] MultiFileSend(10) iter {}/{}: direct={}ms, helper={}ms", i + 1, ITERATIONS, directMs, helper1Ms);
 
-            return new TimingSample(directMs, helperMs);
-        });
+                // Variant 2: WHOLE_TRANSFER_COMPLETION_ONLY (1 batch event)
+                throttleGuard(LONG_THROTTLE_MS);
+                FileSet h2 = prepareFiles("ms-h2", uid);
+                throttleGuard(LONG_THROTTLE_MS);
+                long helper2Ms = timeHelper(
+                        () -> helper.startFileTransfer(ftMultiSendReq(h2.s3Paths()), testMetadata("bench-ms-whole"),
+                                FileTransferOptions.builder().emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY).build()),
+                        StartFileTransferResponse::transferId, "transfer-id", 1, MULTI_POLL_TIMEOUT);
+                h2.keys().forEach(this::cleanupS3);
+                wholeOnlySamples.add(new TimingSample(directMs, helper2Ms));
+                LOG.info("[BENCHMARK] MultiFileSend(10)-WholeOnly iter {}/{}: direct={}ms, helper={}ms", i + 1, ITERATIONS, directMs, helper2Ms);
+
+                // Variant 3: INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION (N+1 events)
+                throttleGuard(LONG_THROTTLE_MS);
+                FileSet h3 = prepareFiles("ms-h3", uid);
+                throttleGuard(LONG_THROTTLE_MS);
+                long helper3Ms = timeHelper(
+                        () -> helper.startFileTransfer(ftMultiSendReq(h3.s3Paths()), testMetadata("bench-ms-ind-whole"),
+                                FileTransferOptions.builder().emissionMode(EventEmissionMode.INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION).build()),
+                        StartFileTransferResponse::transferId, "transfer-id", MULTI_FILE_COUNT + 1, MULTI_POLL_TIMEOUT);
+                h3.keys().forEach(this::cleanupS3);
+                indWholeSamples.add(new TimingSample(directMs, helper3Ms));
+                LOG.info("[BENCHMARK] MultiFileSend(10)-Ind+Whole iter {}/{}: direct={}ms, helper={}ms", i + 1, ITERATIONS, directMs, helper3Ms);
+
+                throttleGuard(LONG_THROTTLE_MS);
+            }
+        } catch (AssertionError | Exception e) {
+            benchmarkFailed = true;
+            throw e;
+        }
+        allTimings.add(new OperationTimings("MultiFileSend(10)", defaultSamples));
+        allTimings.add(new OperationTimings("MultiFileSend(10)-WholeOnly", wholeOnlySamples));
+        allTimings.add(new OperationTimings("MultiFileSend(10)-Ind+Whole", indWholeSamples));
     }
 
-    @Test @Order(6)
+    @Test @Order(7)
     void benchmarkMultiFileRetrieve() {
-        runBenchmark("MultiFileRetrieve(10)", LONG_THROTTLE_MS, i -> {
-            String uid = UUID.randomUUID().toString().substring(0, 8);
+        List<TimingSample> defaultSamples = new ArrayList<>();
+        List<TimingSample> wholeOnlySamples = new ArrayList<>();
+        List<TimingSample> indWholeSamples = new ArrayList<>();
 
-            // Setup: send files to remote
-            FileSet setup = prepareFiles("mr-setup", uid);
-            List<String> remotePaths = new ArrayList<>();
-            for (int f = 0; f < MULTI_FILE_COUNT; f++)
-                remotePaths.add(REMOTE_DIR + "/mr-setup-" + uid + "-file-" + f + ".txt");
+        try {
+            for (int i = 0; i < ITERATIONS; i++) {
+                String uid = UUID.randomUUID().toString().substring(0, 8);
 
-            String setupId = transferClient.startFileTransfer(ftMultiSendReq(setup.s3Paths())).transferId();
-            trackForCleanup(setupId);
-            pollForAllRawEvents("transfer-id", setupId, MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
-            setup.keys().forEach(this::cleanupS3);
-            throttleGuard(LONG_THROTTLE_MS);
+                // Setup: send files to remote (shared across all variants)
+                FileSet setup = prepareFiles("mr-setup", uid);
+                List<String> remotePaths = new ArrayList<>();
+                for (int f = 0; f < MULTI_FILE_COUNT; f++)
+                    remotePaths.add(REMOTE_DIR + "/mr-setup-" + uid + "-file-" + f + ".txt");
 
-            // Direct
-            String dLocalDir = "/" + TEST_S3_BUCKET + "/benchmark/mr-d-" + uid;
-            long directMs = timeDirect(
-                    () -> transferClient.startFileTransfer(ftRetrieveReq(remotePaths, dLocalDir)).transferId(),
-                    "transfer-id", MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
-            cleanupS3Prefix("benchmark/mr-d-" + uid);
+                String setupId = transferClient.startFileTransfer(ftMultiSendReq(setup.s3Paths())).transferId();
+                trackForCleanup(setupId);
+                pollForAllRawEvents("transfer-id", setupId, MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
+                setup.keys().forEach(this::cleanupS3);
+                throttleGuard(LONG_THROTTLE_MS);
 
-            throttleGuard(LONG_THROTTLE_MS);
+                // Shared direct baseline
+                String dLocalDir = "/" + TEST_S3_BUCKET + "/benchmark/mr-d-" + uid;
+                long directMs = timeDirect(
+                        () -> transferClient.startFileTransfer(ftRetrieveReq(remotePaths, dLocalDir)).transferId(),
+                        "transfer-id", MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
+                cleanupS3Prefix("benchmark/mr-d-" + uid);
 
-            // Helper
-            String hLocalDir = "/" + TEST_S3_BUCKET + "/benchmark/mr-h-" + uid;
-            long helperMs = timeHelper(
-                    () -> helper.startFileTransfer(ftRetrieveReq(remotePaths, hLocalDir), testMetadata("bench-multi-retrieve")),
-                    StartFileTransferResponse::transferId, "transfer-id", MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
-            cleanupS3Prefix("benchmark/mr-h-" + uid);
+                // Variant 1: default (individual events only)
+                throttleGuard(LONG_THROTTLE_MS);
+                String h1LocalDir = "/" + TEST_S3_BUCKET + "/benchmark/mr-h1-" + uid;
+                long helper1Ms = timeHelper(
+                        () -> helper.startFileTransfer(ftRetrieveReq(remotePaths, h1LocalDir), testMetadata("bench-mr-default")),
+                        StartFileTransferResponse::transferId, "transfer-id", MULTI_FILE_COUNT, MULTI_POLL_TIMEOUT);
+                cleanupS3Prefix("benchmark/mr-h1-" + uid);
+                defaultSamples.add(new TimingSample(directMs, helper1Ms));
+                LOG.info("[BENCHMARK] MultiFileRetrieve(10) iter {}/{}: direct={}ms, helper={}ms", i + 1, ITERATIONS, directMs, helper1Ms);
 
-            return new TimingSample(directMs, helperMs);
-        });
+                // Variant 2: WHOLE_TRANSFER_COMPLETION_ONLY (1 batch event)
+                throttleGuard(LONG_THROTTLE_MS);
+                String h2LocalDir = "/" + TEST_S3_BUCKET + "/benchmark/mr-h2-" + uid;
+                long helper2Ms = timeHelper(
+                        () -> helper.startFileTransfer(ftRetrieveReq(remotePaths, h2LocalDir), testMetadata("bench-mr-whole"),
+                                FileTransferOptions.builder().emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY).build()),
+                        StartFileTransferResponse::transferId, "transfer-id", 1, MULTI_POLL_TIMEOUT);
+                cleanupS3Prefix("benchmark/mr-h2-" + uid);
+                wholeOnlySamples.add(new TimingSample(directMs, helper2Ms));
+                LOG.info("[BENCHMARK] MultiFileRetrieve(10)-WholeOnly iter {}/{}: direct={}ms, helper={}ms", i + 1, ITERATIONS, directMs, helper2Ms);
+
+                // Variant 3: INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION (N+1 events)
+                throttleGuard(LONG_THROTTLE_MS);
+                String h3LocalDir = "/" + TEST_S3_BUCKET + "/benchmark/mr-h3-" + uid;
+                long helper3Ms = timeHelper(
+                        () -> helper.startFileTransfer(ftRetrieveReq(remotePaths, h3LocalDir), testMetadata("bench-mr-ind-whole"),
+                                FileTransferOptions.builder().emissionMode(EventEmissionMode.INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION).build()),
+                        StartFileTransferResponse::transferId, "transfer-id", MULTI_FILE_COUNT + 1, MULTI_POLL_TIMEOUT);
+                cleanupS3Prefix("benchmark/mr-h3-" + uid);
+                indWholeSamples.add(new TimingSample(directMs, helper3Ms));
+                LOG.info("[BENCHMARK] MultiFileRetrieve(10)-Ind+Whole iter {}/{}: direct={}ms, helper={}ms", i + 1, ITERATIONS, directMs, helper3Ms);
+
+                throttleGuard(LONG_THROTTLE_MS);
+            }
+        } catch (AssertionError | Exception e) {
+            benchmarkFailed = true;
+            throw e;
+        }
+        allTimings.add(new OperationTimings("MultiFileRetrieve(10)", defaultSamples));
+        allTimings.add(new OperationTimings("MultiFileRetrieve(10)-WholeOnly", wholeOnlySamples));
+        allTimings.add(new OperationTimings("MultiFileRetrieve(10)-Ind+Whole", indWholeSamples));
     }
 
     // --- Summary table ---

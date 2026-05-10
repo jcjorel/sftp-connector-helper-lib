@@ -109,6 +109,8 @@ Transfer started: t-abcdef1234567890
 2. It wrote your metadata JSON to DynamoDB with a conditional check (idempotent).
 3. When Transfer Family completes the transfer, it emits an event. The framework's Joiner Lambda joins your metadata with that event and publishes an enriched event to the dedicated EventBridge bus.
 
+See [Architecture — Data Flow](ARCHITECTURE.md#happy-path-single-file-operation) for the full pipeline diagram.
+
 The `sendFilePaths` format is `/<bucket>/<key>` — the file must already exist in S3.
 
 ---
@@ -185,6 +187,8 @@ Batch transfer started: t-xyz7890abcdef123
 3. As each file completes, Transfer Family emits a per-file event with a unique `file-transfer-id`.
 4. The Joiner copies metadata from the master record to each per-file record and publishes 5 enriched events.
 
+See [Architecture — Fan-Out Path](ARCHITECTURE.md#fan-out-path-multi-file-transfer) for the internal metadata copy mechanism.
+
 Your consumer receives 5 events, each with:
 - `transfer-id` — the shared batch ID
 - `file-transfer-id` — unique per file
@@ -193,7 +197,46 @@ Your consumer receives 5 events, each with:
 
 ---
 
-## Scenario 4: List a Remote Directory
+## Scenario 4: Retrieve a File from the SFTP Server
+
+**Goal**: Download a file from the remote SFTP server to S3 and attach business metadata.
+
+```java
+import io.github.jcjorel.sftpconnectorhelper.*;
+import software.amazon.awssdk.services.transfer.model.*;
+
+StartFileTransferRequest request = StartFileTransferRequest.builder()
+    .connectorId("c-1234567890abcdef0")
+    .retrieveFilePaths("/remote/invoices/invoice-101.csv")
+    .localDirectoryPath("/my-bucket/inbound")
+    .build();
+
+String metadata = """
+    {"action":"retrieve","source":"partner-sftp","expectedFile":"invoice-101.csv"}
+    """;
+
+var result = helper.startFileTransfer(request, metadata);
+
+if (result instanceof SftpOperationResult.Success<StartFileTransferResponse> s) {
+    System.out.println("Retrieve started: " + s.response().transferId());
+}
+```
+
+**Expected output**:
+```
+Retrieve started: t-ret7890abcdef123
+```
+
+**What just happened**:
+1. Transfer Family started downloading the file from the remote SFTP server to your S3 bucket at `/my-bucket/inbound/invoice-101.csv`.
+2. The helper wrote your metadata to DynamoDB (same mechanism as file send).
+3. When the download completes, you receive an enriched event with `detail-type: "SFTP Connector File Retrieve Completed"` and your metadata in `_helper_metadata`.
+
+The `retrieveFilePaths` format is the remote path on the SFTP server. The `localDirectoryPath` is `/<bucket>/<prefix>` where the file will be stored in S3. Multi-file retrieve works identically to multi-file send (fan-out with per-file events).
+
+---
+
+## Scenario 5: List a Remote Directory
 
 **Goal**: List files on the SFTP server and filter the results by pattern.
 
@@ -220,6 +263,8 @@ if (result instanceof SftpOperationResult.Success<StartDirectoryListingResponse>
 When the enriched event arrives, use `DirectoryListingFilter` to extract matching files:
 
 ```java
+import io.github.jcjorel.sftpconnectorhelper.DirectoryListingFilter;
+import io.github.jcjorel.sftpconnectorhelper.DirectoryListingResult;
 import software.amazon.awssdk.services.s3.S3Client;
 
 DirectoryListingFilter filter = new DirectoryListingFilter(S3Client.create());
@@ -253,7 +298,7 @@ See [User Guide — Directory Listing Filter](USER_GUIDE.md#directory-listing-fi
 
 ---
 
-## Scenario 5: Move a Remote File
+## Scenario 6: Move a Remote File
 
 **Goal**: Rename or move a file on the SFTP server after processing.
 
@@ -288,7 +333,7 @@ Move started: m-789abc012def345
 
 ---
 
-## Scenario 6: Delete a Remote File
+## Scenario 7: Delete a Remote File
 
 **Goal**: Remove a file from the SFTP server.
 
@@ -315,7 +360,7 @@ if (result instanceof SftpOperationResult.Success<StartRemoteDeleteResponse> s) 
 
 ---
 
-## Scenario 7: Handle Result Types Correctly
+## Scenario 8: Handle Result Types Correctly
 
 **Goal**: Understand and handle all three result types in production code.
 
@@ -351,7 +396,7 @@ switch (result) {
 
 ---
 
-## Scenario 8: Subscribe to Orphan Alerts
+## Scenario 9: Subscribe to Orphan Alerts
 
 **Goal**: Get notified when metadata correlation fails (events without metadata or metadata without events).
 
@@ -369,42 +414,74 @@ See [User Guide — Orphan Alert Response](USER_GUIDE.md#orphan-alert-response) 
 
 ---
 
-## Scenario 9: Track Multi-File Batch Completion
+## Scenario 10: Batch Completion with FileTransferOptions
 
-**Goal**: Detect when all files in a batch transfer have completed.
+**Goal**: Send multiple files and receive a single "all done" event instead of tracking per-file completion yourself.
 
-Transfer Family emits one event per file with no batch-level signal. Track completion in your consumer:
+```java
+import io.github.jcjorel.sftpconnectorhelper.*;
+import software.amazon.awssdk.services.transfer.model.*;
 
-```python
-import boto3
+List<String> files = List.of(
+    "/my-bucket/batch/report-1.csv",
+    "/my-bucket/batch/report-2.csv",
+    "/my-bucket/batch/report-3.csv"
+);
 
-dynamodb = boto3.resource("dynamodb")
-table = dynamodb.Table("my-batch-tracker")  # your own table
+StartFileTransferRequest request = StartFileTransferRequest.builder()
+    .connectorId("c-1234567890abcdef0")
+    .sendFilePaths(files)
+    .remoteDirectoryPath("/uploads/daily")
+    .build();
 
-def lambda_handler(event, context):
-    detail = event["detail"]
-    meta = detail["_helper_metadata"]
-    batch_id = meta["batchId"]
-    expected = meta["fileCount"]
+String metadata = """
+    {"batchId":"BATCH-2026-05-10","workflow":"daily-export"}
+    """;
 
-    # Atomic increment
-    resp = table.update_item(
-        Key={"batchId": batch_id},
-        UpdateExpression="ADD completedCount :one SET #s = :status",
-        ExpressionAttributeNames={"#s": "lastStatus"},
-        ExpressionAttributeValues={":one": 1, ":status": detail["status-code"]},
-        ReturnValues="UPDATED_NEW",
-    )
+FileTransferOptions options = FileTransferOptions.builder()
+    .emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY)
+    .build();
 
-    completed = int(resp["Attributes"]["completedCount"])
-    if completed >= expected:
-        print(f"Batch {batch_id}: all {expected} files done")
-        # Trigger downstream workflow
+var result = helper.startFileTransfer(request, metadata, options);
+
+if (result instanceof SftpOperationResult.Success<StartFileTransferResponse> s) {
+    System.out.println("Batch transfer started: " + s.response().transferId());
+    // You will receive ONE batch completion event when all 3 files are done
+}
 ```
 
-**What just happened**: By including `fileCount` in your metadata (see Scenario 3), consumers know when the batch is complete without querying the source system.
+**Expected output**:
+```
+Batch transfer started: t-batch456def789
+```
 
-See [User Guide — Best Practices](USER_GUIDE.md#best-practices) for retry strategies, graceful degradation, and idempotency patterns.
+Your consumer receives a single batch completion event:
+
+```json
+{
+  "source": "custom.sftp-connector-helper",
+  "detail-type": "SFTP Connector Whole File Send Transfer Completed - CUSTOM",
+  "detail": {
+    "transfer-id": "t-batch456def789",
+    "connector-id": "c-1234567890abcdef0",
+    "batch-status": "ALL_COMPLETED",
+    "file-count": 3,
+    "completed-count": 3,
+    "failed-count": 0,
+    "_helper_metadata": {"batchId": "BATCH-2026-05-10", "workflow": "daily-export"},
+    "files": [...]
+  }
+}
+```
+
+**What just happened**:
+1. The helper wrote batch-tracking fields (`emissionMode`, `expectedFiles`, `transferDirection`) to the master DynamoDB record.
+2. As each file completed, the Joiner tracked it in the master record's `fileStatuses` map — but did **not** publish individual enriched events (suppressed by `WHOLE_TRANSFER_COMPLETION_ONLY`).
+3. When the last file resolved, the Joiner detected `resolvedCount == expectedFiles` and published the batch completion event with all file statuses aggregated.
+
+See [Architecture — Whole Transfer Completion](ARCHITECTURE.md#whole-transfer-completion-batch-tracking) for the internal batch tracking mechanism.
+
+**Other modes**: Use `INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION` to receive both per-file events *and* the batch event. See [User Guide — Batch Completion Events](USER_GUIDE.md#batch-completion-events-filetransferoptions) for the full API reference.
 
 ---
 
