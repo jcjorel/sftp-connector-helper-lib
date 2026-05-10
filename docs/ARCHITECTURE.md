@@ -5,17 +5,17 @@
 The SFTP Connector Helper framework correlates business metadata with AWS Transfer Family SFTP Connector events through a serverless pipeline built on DynamoDB, EventBridge, and Lambda.
 
 ```
-┌─────────────────┐       ┌──────────────┐       ┌──────────────────┐
-│  Your App       │       │  Transfer    │       │  Default         │
-│  (Java Helper)  │       │  Family      │       │  EventBridge Bus │
-└────┬────────────┘       └──────┬───────┘       └────────┬─────────┘
+┌─────────────────┐       ┌──────────────┐        ┌──────────────────┐
+│  Your App       │       │  Transfer    │        │  Default         │
+│  (Java Helper)  │       │  Family      │        │  EventBridge Bus │
+└────┬────────────┘       └──────┬───────┘        └────────┬─────────┘
      │                           │                         │
      │ 1. SDK call               │ 2. Async event          │
      │ 2. Write metadata         │    (detail-type:        │
      │    to DynamoDB            │     "SFTP Connector…")  │
      ▼                           ▼                         │
 ┌──────────────────────────────────────────┐               │
-│            DynamoDB Table                 │◄──────────────┘
+│            DynamoDB Table                │◄──────────────┘
 │  PK: jobId                               │   3. Event Writer Lambda
 │  metadata | eventResult | transferId     │      (EventBridge → Lambda)
 │  GSI: transferId-index                   │
@@ -26,10 +26,10 @@ The SFTP Connector Helper framework correlates business metadata with AWS Transf
 │  EventBridge Pipe (batch_size=1) │
 └────────────────┬─────────────────┘
                  ▼
-┌──────────────────────────────────┐       ┌─────────────────────────┐
+┌──────────────────────────────────┐        ┌─────────────────────────┐
 │  Joiner Lambda                   │──────▶│  Dedicated EventBridge  │
-│  - Completeness check            │       │  Bus (enriched events)  │
-│  - Fan-out metadata copy         │       └─────────────────────────┘
+│  - Completeness check            │        │  Bus (enriched events)  │
+│  - Fan-out metadata copy         │        └─────────────────────────┘
 │  - Orphan detection (TTL expiry) │
 │  - Publish enriched event        │──────▶ SNS (orphan alerts)
 └──────────────────────────────────┘
@@ -107,6 +107,8 @@ helper = SftpConnectorHelper(self, "Helper", SftpConnectorHelperProps(
 helper.event_bus.grant_put_events_to(my_consumer_lambda)
 ```
 
+See [Getting Started](GETTING_STARTED.md) for a hands-on deployment walkthrough.
+
 ## Idempotency Contract
 
 | Component | Write Type | Condition | Behavior on Conflict |
@@ -142,7 +144,7 @@ The Event Writer captures events matching `source: "aws.transfer"` with `detail-
 | `SFTP Connector Remote Move …` | `detail.move-id` | No |
 | `SFTP Connector Remote Delete …` | `detail.delete-id` | No |
 
-**Enriched event source rewrite**: When the Joiner publishes to the dedicated bus, it rewrites the `source` field from `"aws.transfer"` to `"custom.sftp-connector-helper"`. The `detail-type` is preserved unchanged. Consumer rules must match on `source: ["custom.sftp-connector-helper"]`.
+**Enriched event source rewrite**: When the Joiner publishes to the dedicated bus, it rewrites the `source` field from `"aws.transfer"` to `"custom.sftp-connector-helper"`. The `detail-type` is preserved unchanged. Consumer rules must match on `source: ["custom.sftp-connector-helper"]`. See [User Guide — Consuming Enriched Events](USER_GUIDE.md#consuming-enriched-events) for rule examples and event format.
 
 **Per-file detection logic**: When a FILE_TRANSFER event contains both `file-transfer-id` and `transfer-id` in its detail, the Event Writer uses `file-transfer-id` as the DynamoDB jobId and stores `transfer-id` as a separate attribute for GSI-based fan-out metadata copy.
 

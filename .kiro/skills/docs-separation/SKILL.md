@@ -49,7 +49,7 @@ A fact MUST appear in at most ONE file; cross-reference links replace repetition
 
 MUST spawn parallel subagents using the `subagent` tool with mode `blocking`. MUST NOT review files sequentially in the main agent context.
 
-MUST use four parallel stages (one per documentation file) with no dependencies between them. After all stages complete, MUST synthesize findings into a consolidated report in the main agent.
+MUST use four parallel stages (one per documentation file) with no dependencies between them. 
 
 ### Subagent Stages
 
@@ -81,7 +81,7 @@ Read {FILE} in full. Evaluate against these criteria:
 
 3. CONTENT QUALITY: Flag stale information, broken links, inconsistencies with source code.
 
-4. DUPLICATION CANDIDATES: Extract key phrases/facts that might also appear in other docs (to be checked in synthesis stage).
+4. DUPLICATION CANDIDATES: Extract key phrases/facts that might also appear in other docs.
 
 Output a structured report with sections: VIOLATIONS, CROSS-REFS, QUALITY, DUPLICATION_CANDIDATES.
 ```
@@ -93,11 +93,11 @@ Output a structured report with sections: VIOLATIONS, CROSS-REFS, QUALITY, DUPLI
 
 ### Cross-Reference Link Validation
 
-In parallel of all four review stages, MUST run a fifth synthesis stage that validates link integrity across all documentation files.
+In parallel of all four review stages, MUST run a fifth stage that validates link integrity across all documentation files.
 
 | Stage name | Depends on | Purpose |
 |------------|-----------|---------|
-| link-validation | readme-review, getting-started-review, architecture-review, user-guide-review | Verify all markdown links resolve to valid targets |
+| link-validation | <none> | Verify all markdown links resolve to valid targets |
 
 #### Link Validation Prompt
 

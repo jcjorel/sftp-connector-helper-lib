@@ -34,13 +34,13 @@ Add the Maven dependency:
 # Verify the DynamoDB table
 aws dynamodb describe-table --table-name sftp-connector-helper \
     --query "Table.TableStatus" --output text \
-    --profile <profile> --region <region>
+    --profile $AWS_PROFILE --region $AWS_REGION
 # Expected: ACTIVE
 
 # Verify the dedicated EventBridge bus
 aws events describe-event-bus --name sftp-connector-helper-bus \
     --query "Name" --output text \
-    --profile <profile> --region <region>
+    --profile $AWS_PROFILE --region $AWS_REGION
 # Expected: sftp-connector-helper-bus
 ```
 
@@ -50,12 +50,12 @@ aws events describe-event-bus --name sftp-connector-helper-bus \
 # Check the EventBridge Pipe exists and is running
 aws pipes list-pipes --name-prefix sftp-connector-helper \
     --query "Pipes[0].CurrentState" --output text \
-    --profile <profile> --region <region>
+    --profile $AWS_PROFILE --region $AWS_REGION
 # Expected: RUNNING
 
 # Check the orphan SNS topic exists
 aws sns list-topics --query "Topics[?contains(TopicArn,'sftp-connector-helper')]" \
-    --output text --profile <profile> --region <region>
+    --output text --profile $AWS_PROFILE --region $AWS_REGION
 # Expected: arn:aws:sns:<region>:<account>:sftp-connector-helper-...
 ```
 
@@ -347,7 +347,7 @@ switch (result) {
 }
 ```
 
-**Key insight**: The SDK call (file transfer) is **not** idempotent — each call starts a new transfer. Only the metadata write is idempotent. If you need retry logic, wrap it around your entire business operation, not around the helper call.
+**Key insight**: The SDK call is **not** idempotent — each call starts a new transfer. See [User Guide — Best Practices](USER_GUIDE.md#best-practices) for retry patterns and the full idempotency contract.
 
 ---
 
