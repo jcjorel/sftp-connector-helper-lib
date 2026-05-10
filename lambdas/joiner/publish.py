@@ -83,3 +83,32 @@ def publish_enriched_event(
             error_code=error_entry.get("ErrorCode"),
             error_message=error_entry.get("ErrorMessage"),
         )
+
+
+def publish_batch_completion_event(
+    events_client,
+    bus_name: str,
+    detail: dict,
+    detail_type: str,
+) -> None:
+    """Publish batch completion event to EventBridge."""
+    response = events_client.put_events(
+        Entries=[
+            {
+                "Source": "custom.sftp-connector-helper",
+                "DetailType": detail_type,
+                "EventBusName": bus_name,
+                "Detail": json.dumps(detail),
+            }
+        ]
+    )
+
+    if response.get("FailedEntryCount", 0) > 0:
+        error_entry = response["Entries"][0]
+        log_structured(
+            "ERROR",
+            "Failed to publish batch completion event",
+            transfer_id=detail.get("transfer-id"),
+            error_code=error_entry.get("ErrorCode"),
+            error_message=error_entry.get("ErrorMessage"),
+        )

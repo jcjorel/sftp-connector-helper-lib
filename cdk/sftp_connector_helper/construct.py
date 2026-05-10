@@ -29,7 +29,7 @@ class SftpConnectorHelperProps:
     ttl_duration: cdk.Duration = cdk.Duration.days(1)
     event_writer_memory: int = 256
     event_writer_timeout: cdk.Duration = cdk.Duration.seconds(30)
-    joiner_memory: int = 256
+    joiner_memory: int = 512
     joiner_timeout: cdk.Duration = cdk.Duration.seconds(30)
     event_bus_log_level: Optional[str] = "INFO"
 

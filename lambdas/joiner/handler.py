@@ -7,6 +7,7 @@ import os
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
 
+from file_transfer_mgmt import process_file_completion, should_publish_individual_event
 from log_util import log_structured
 from metadata_copy import copy_metadata_from_master, fan_out_metadata_to_per_file_records
 from orphan_detection import detect_orphan
@@ -101,7 +102,7 @@ def _metadata_copy_dispatch(new_image: dict, job_id: str) -> bool:
     # Master detection: has metadata, no eventResult, no transferId
     if has_metadata and not has_event_result and not has_transfer_id:
         log_structured("INFO", "Master record detected, fanning out metadata", job_id=job_id)
-        fan_out_metadata_to_per_file_records(table, job_id, new_image["metadata"])
+        fan_out_metadata_to_per_file_records(table, job_id, new_image["metadata"], events, EVENT_BUS_NAME)
         return True
 
     return False
@@ -147,6 +148,10 @@ def _process_record(stream_record: dict) -> None:
                     job_id=job_id,
                 )
                 return
+            # Stream loop guard: master record batch-tracking updates
+            if "metadata" in old_image and "fileStatuses" in new_image and not _has_both_fields(new_image):
+                log_structured("INFO", "Skipping batch-tracking MODIFY on master record", job_id=job_id)
+                return
             # Metadata-copy loop prevention: OldImage already has metadata → skip copy rules
             if "metadata" not in old_image:
                 if _metadata_copy_dispatch(new_image, job_id):
@@ -180,15 +185,33 @@ def _process_record(stream_record: dict) -> None:
         _emit_invalid_metadata_metric(connector_id)
         return
 
-    # Publish enriched event
-    log_structured(
-        "INFO",
-        "Record complete, publishing enriched event",
-        detail=event_detail,
-        job_id=job_id,
-        connector_id=connector_id,
-    )
-    publish_enriched_event(events, EVENT_BUS_NAME, event_result_str, metadata_str, job_id)
+    # Read master record for emission mode gating and batch tracking
+    transfer_id = new_image.get("transferId")
+    master_record = None
+    if transfer_id:
+        master_resp = table.get_item(Key={"jobId": transfer_id}, ConsistentRead=True)
+        master_record = master_resp.get("Item")
+
+    # Publish individual enriched event (gated by emission mode)
+    if should_publish_individual_event(master_record):
+        log_structured(
+            "INFO",
+            "Record complete, publishing enriched event",
+            detail=event_detail,
+            job_id=job_id,
+            connector_id=connector_id,
+        )
+        publish_enriched_event(events, EVENT_BUS_NAME, event_result_str, metadata_str, job_id)
+
+    # Batch tracking: process file completion if master has batch fields
+    if master_record and master_record.get("expectedFiles") is not None and event_detail:
+        # Note: job_id here IS the file-transfer-id by construction — the Event Writer
+        # uses event detail's "file-transfer-id" as the DynamoDB partition key for per-file
+        # records (see event-writer/field_mapping.py). This is consistent with
+        # reconcile_existing_files which extracts the same value from event detail.
+        enriched_detail = dict(event_detail)
+        enriched_detail["_helper_metadata"] = json.loads(metadata_str)
+        process_file_completion(table, events, EVENT_BUS_NAME, master_record, job_id, enriched_detail)
 
 
 def lambda_handler(event, context):

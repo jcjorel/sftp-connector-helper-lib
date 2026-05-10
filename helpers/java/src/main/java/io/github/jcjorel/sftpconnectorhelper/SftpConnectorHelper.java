@@ -234,14 +234,20 @@ public final class SftpConnectorHelper implements AutoCloseable {
         UpdateItemRequest updateRequest = UpdateItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of("jobId", AttributeValue.builder().s(jobId).build()))
-                .updateExpression("SET metadata = :m, #t = :t, emissionMode = :em, expectedFiles = :ef, transferDirection = :td")
+                .updateExpression("SET metadata = :m, #t = :t, emissionMode = :em, expectedFiles = :ef, transferDirection = :td, fileStatuses = :fs")
                 .expressionAttributeNames(Map.of("#t", "ttl"))
                 .expressionAttributeValues(Map.of(
                         ":m", AttributeValue.builder().s(metadata).build(),
                         ":t", AttributeValue.builder().n(String.valueOf(ttlEpochSeconds)).build(),
                         ":em", AttributeValue.builder().s(mode.name()).build(),
                         ":ef", AttributeValue.builder().n(String.valueOf(expectedFiles)).build(),
-                        ":td", AttributeValue.builder().s(transferDirection).build()
+                        ":td", AttributeValue.builder().s(transferDirection).build(),
+                        // Sentinel entry "_init" ensures the map is persisted by DynamoDB.
+                        // Java SDK v2 silently drops empty maps in UpdateItem expressions.
+                        // The joiner Lambda filters out "_init" when assembling batch events.
+                        ":fs", AttributeValue.builder().m(Map.of(
+                                "_init", AttributeValue.builder().m(Map.of()).build()
+                        )).build()
                 ))
                 .conditionExpression("attribute_not_exists(metadata)")
                 .build();

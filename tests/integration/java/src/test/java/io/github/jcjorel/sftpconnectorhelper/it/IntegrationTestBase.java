@@ -515,6 +515,87 @@ public abstract class IntegrationTestBase {
         return found;
     }
 
+    /**
+     * Poll the SQS queue for enriched events matching a detail-type and a field/value inside detail.
+     * Returns all matching event detail nodes once the expected count is reached.
+     */
+    protected List<JsonNode> pollForEnrichedEventsByDetailType(
+            String detailType, String jobIdField, String jobIdValue, int expectedCount, Duration timeout) {
+        LOG.info("Polling for {} events with detail-type='{}', {}={} (timeout={}s)",
+                expectedCount, detailType, jobIdField, jobIdValue, timeout.toSeconds());
+        List<JsonNode> found = new ArrayList<>();
+
+        await().atMost(timeout).pollInterval(Duration.ofMillis(100)).until(() -> {
+            ReceiveMessageResponse resp = sqsClient.receiveMessage(ReceiveMessageRequest.builder()
+                    .queueUrl(queueUrl)
+                    .maxNumberOfMessages(10)
+                    .waitTimeSeconds(20)
+                    .build());
+            for (Message msg : resp.messages()) {
+                sqsClient.deleteMessage(DeleteMessageRequest.builder()
+                        .queueUrl(queueUrl).receiptHandle(msg.receiptHandle()).build());
+                try {
+                    JsonNode event = MAPPER.readTree(msg.body());
+                    String eventDetailType = event.has("detail-type") ? event.get("detail-type").asText() : "";
+                    if (!detailType.equals(eventDetailType)) continue;
+                    JsonNode detail = event.has("detail") && event.get("detail").isTextual()
+                            ? MAPPER.readTree(event.get("detail").asText())
+                            : event.get("detail");
+                    if (detail != null && detail.has(jobIdField)
+                            && jobIdValue.equals(detail.get(jobIdField).asText())) {
+                        found.add(detail);
+                        LOG.info("Found matching event {}/{} (detail-type='{}')", found.size(), expectedCount, detailType);
+                    }
+                } catch (Exception e) {
+                    LOG.warn("Failed to parse SQS message: {}", e.getMessage());
+                }
+            }
+            return found.size() >= expectedCount;
+        });
+
+        LOG.info("All {} events received for detail-type='{}', {}={}", found.size(), detailType, jobIdField, jobIdValue);
+        return found;
+    }
+
+    /**
+     * Poll the SQS queue and assert no events matching the given detail-type arrive within the timeout.
+     * Returns any events that did arrive (should be empty for a passing assertion).
+     */
+    protected List<JsonNode> pollAndExpectNoEvents(
+            String detailType, String jobIdField, String jobIdValue, Duration timeout) {
+        LOG.info("Asserting no events with detail-type='{}', {}={} within {}s",
+                detailType, jobIdField, jobIdValue, timeout.toSeconds());
+        List<JsonNode> found = new ArrayList<>();
+        long deadline = System.currentTimeMillis() + timeout.toMillis();
+
+        while (System.currentTimeMillis() < deadline) {
+            ReceiveMessageResponse resp = sqsClient.receiveMessage(ReceiveMessageRequest.builder()
+                    .queueUrl(queueUrl)
+                    .maxNumberOfMessages(10)
+                    .waitTimeSeconds(5)
+                    .build());
+            for (Message msg : resp.messages()) {
+                sqsClient.deleteMessage(DeleteMessageRequest.builder()
+                        .queueUrl(queueUrl).receiptHandle(msg.receiptHandle()).build());
+                try {
+                    JsonNode event = MAPPER.readTree(msg.body());
+                    String eventDetailType = event.has("detail-type") ? event.get("detail-type").asText() : "";
+                    if (!detailType.equals(eventDetailType)) continue;
+                    JsonNode detail = event.has("detail") && event.get("detail").isTextual()
+                            ? MAPPER.readTree(event.get("detail").asText())
+                            : event.get("detail");
+                    if (detail != null && detail.has(jobIdField)
+                            && jobIdValue.equals(detail.get(jobIdField).asText())) {
+                        found.add(detail);
+                    }
+                } catch (Exception e) {
+                    LOG.warn("Failed to parse SQS message: {}", e.getMessage());
+                }
+            }
+        }
+        return found;
+    }
+
     /** Assert that _helper_metadata in the event matches the original metadata. */
     protected void assertEnrichedMetadata(JsonNode eventDetail, String originalMetadata) throws Exception {
         assert eventDetail.has("_helper_metadata") : "Enriched event missing _helper_metadata";

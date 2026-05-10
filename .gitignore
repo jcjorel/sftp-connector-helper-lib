@@ -30,3 +30,7 @@ node_modules/
 # IDE Chat database
 chats.db
 
+# BMAD
+.kiro/skills/bmad-*
+_bmad-output/
+_bmad/
