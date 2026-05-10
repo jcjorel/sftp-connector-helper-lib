@@ -28,7 +28,7 @@ All operations follow the same pattern: validate metadata (throws `IllegalArgume
 | `startRemoteMove(request, metadata)` | `StartRemoteMoveRequest` | `SftpOperationResult<StartRemoteMoveResponse>` |
 | `startRemoteDelete(request, metadata)` | `StartRemoteDeleteRequest` | `SftpOperationResult<StartRemoteDeleteResponse>` |
 
-> **Note**: `startFileTransfer` uses a staggered TTL (base + 1 hour) to ensure the master record outlives per-file records during multi-file fan-out operations. Other operations use the standard TTL.
+> **Note**: `startFileTransfer` handles multi-file fan-out automatically. See [Architecture — Fan-Out Path](ARCHITECTURE.md#fan-out-path-multi-file-transfer) for internal details.
 
 ### Result Types
 
@@ -82,7 +82,7 @@ Your application's IAM role needs:
 
 For `DirectoryListingFilter`, add `s3:GetObject` on the listing output bucket.
 
-> **Note**: If using `existing_table_arn` in the CDK construct, ensure the Joiner Lambda role has `dynamodb:UpdateItem` and `dynamodb:GetItem` on the table, plus `dynamodb:Query` on the `transferId-index` GSI. The CDK construct handles this automatically for new tables.
+> **Note**: When using an imported table via CDK construct props, ensure the Joiner Lambda role has the required DynamoDB permissions. See [Architecture — CDK Construct Reference](ARCHITECTURE.md#cdk-construct-reference) for details.
 
 ### Directory Listing Filter
 
@@ -162,13 +162,13 @@ events.Rule(self, "MyConsumerRule",
 
 ### Monitoring Dashboard
 
-Key metrics to watch (namespace: `SftpConnectorHelper`):
+Key metrics to watch — see [Architecture — CloudWatch Metrics](ARCHITECTURE.md#cloudwatch-metrics) for full metric definitions and dimensions.
 
-| Metric | Emitted By | Alert Threshold | Action |
-|--------|-----------|----------------|--------|
-| `OrphanedRecords` | Joiner Lambda | > 0 | Investigate: app not writing metadata before Transfer Family events arrive. Note: `ConnectorId` dimension is `UNKNOWN` for metadata-only orphans (no event to extract from). |
-| `InvalidMetadata` | Joiner Lambda | > 0 | Fix caller: metadata must be a JSON object |
-| `UnknownOperationType` | Event Writer Lambda | > 0 | New Transfer Family event type? Update `field_mapping.py` |
+| Metric | Alert Threshold | Action |
+|--------|----------------|--------|
+| `OrphanedRecords` | > 0 | Investigate: app not writing metadata before Transfer Family events arrive |
+| `InvalidMetadata` | > 0 | Fix caller: metadata must be a JSON object |
+| `UnknownOperationType` | > 0 | New Transfer Family event type? Update `field_mapping.py` |
 
 AWS-managed metrics:
 | Metric | Namespace | Alert Threshold |
@@ -179,9 +179,7 @@ AWS-managed metrics:
 
 ### DLQ Inspection
 
-Two DLQs exist:
-1. **EventWriterDLQ** — Events that failed Lambda invocation after 2 retries (3 total attempts)
-2. **PipeDLQ** — DynamoDB Stream records that failed Joiner processing after 3 retries (or 1-hour record age, whichever comes first)
+Two DLQs capture failed processing — see [Architecture — Dead Letter Queues](ARCHITECTURE.md#dead-letter-queues) for retry configuration and trigger conditions.
 
 Inspect with:
 ```bash
@@ -190,11 +188,14 @@ aws sqs receive-message --queue-url <dlq-url> --max-number-of-messages 10 --prof
 
 ### Orphan Alert Response
 
-When you receive an SNS orphan alert:
-1. Check if your application is failing to write metadata entirely (this is NOT a timing race — the system handles event-before-metadata ordering gracefully)
-2. Verify the connector ID in the alert matches a connector you're tracking
-3. If legitimate orphan: no action needed (TTL will clean up)
-4. If systematic: your app may be crashing before calling the helper — check app logs and error handling
+When you receive an SNS orphan alert — see [Architecture — Orphan Detection](ARCHITECTURE.md#orphan-detection) for the internal detection mechanism:
+
+| Symptom | Action |
+|---------|--------|
+| App failing to write metadata entirely | Fix error handling — this is NOT a timing race, the system handles event-before-metadata ordering gracefully |
+| Connector ID doesn't match a tracked connector | Using SFTP Connector without the helper — expected |
+| Legitimate one-off orphan | No action needed (TTL will clean up) |
+| Systematic orphans | App may be crashing before calling the helper — check app logs |
 
 ### Log Groups
 
@@ -204,6 +205,50 @@ When you receive an SNS orphan alert:
 | `/aws/lambda/sftp-connector-helper-joiner` | Correlation, publishing, orphan detection |
 
 All logs are structured JSON with fields: `job_id`, `connector_id`, `operation`, `message`.
+
+## Security Considerations
+
+### Metadata Content
+
+Metadata you pass to the helper flows through multiple AWS services in plaintext:
+
+- **Stored** in DynamoDB (encrypted at rest with AWS-managed keys by default)
+- **Logged** in Lambda structured logs (CloudWatch Logs)
+- **Published** verbatim as `_helper_metadata` in EventBridge events
+- **Visible** to any consumer subscribed to the dedicated bus
+
+**Do not put in metadata**:
+- Secrets, API keys, or credentials
+- Unencrypted PII (names, emails, addresses) — use opaque identifiers or tokens instead
+- Data subject to regulatory constraints (PHI, PCI) unless your entire pipeline is compliant
+
+**Recommended approach**: Store sensitive data in your own systems and pass only correlation identifiers (order IDs, customer reference codes) in metadata.
+
+### Event Bus Access Control
+
+Any IAM principal with `events:PutRule` + `events:PutTargets` on the dedicated bus (`sftp-connector-helper-bus`) can subscribe and read all enriched events including metadata. Restrict bus access to trusted roles:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["events:PutRule", "events:PutTargets"],
+  "Resource": "arn:aws:events:<region>:<account>:rule/sftp-connector-helper-bus/*",
+  "Condition": {
+    "StringEquals": {"aws:PrincipalOrgID": "o-your-org-id"}
+  }
+}
+```
+
+### Event Bus Logging
+
+By default, full event detail — including your metadata — is written to CloudWatch Logs via the dedicated bus. In sensitive environments, disable bus-level logging via the CDK construct configuration (see [Architecture — CDK Construct Reference](ARCHITECTURE.md#cdk-construct-reference)), or ensure log group access is restricted.
+
+### Consumer Least-Privilege
+
+Consumer Lambdas should only have:
+- `events:DescribeRule` on their own rule
+- Invoke permission granted via the EventBridge target (CDK handles this automatically with `targets.LambdaFunction`)
+- No direct `dynamodb:*` access to the helper table (consumers read from EventBridge, not DynamoDB)
 
 ## Troubleshooting
 
@@ -236,6 +281,57 @@ DynamoDB write failed after the SDK call succeeded. The transfer is running but 
 - Verify your rule is on the **dedicated bus** (`sftp-connector-helper-bus`), not the default bus
 - Check the `detail-type` in your rule matches exactly (case-sensitive)
 - Verify your consumer Lambda has permission to be invoked by EventBridge
+
+## Best Practices
+
+### Retry at the Business Level, Not the Helper Level
+
+The SDK call is not idempotent — retrying the helper starts a **new** transfer. Wrap retries around your entire business operation with a stable idempotency key:
+
+```java
+// ✗ WRONG — retrying the helper creates duplicate transfers
+for (int i = 0; i < 3; i++) {
+    var result = helper.startFileTransfer(request, metadata);
+    if (result instanceof SftpOperationResult.Success) break;
+}
+
+// ✓ CORRECT — retry the business operation with idempotency at your layer
+public void processOrder(Order order) {
+    if (alreadySubmitted(order.id())) return; // your idempotency check
+
+    var result = helper.startFileTransfer(request, metadata);
+    switch (result) {
+        case SftpOperationResult.Success s -> markSubmitted(order.id(), s.response().transferId());
+        case SftpOperationResult.MetadataWriteFailed f -> {
+            // Transfer is running but won't produce enriched event.
+            // Log for manual reconciliation; don't retry.
+            log.warn("Transfer {} has no metadata correlation", f.response().transferId());
+            markSubmitted(order.id(), f.response().transferId());
+        }
+        case SftpOperationResult.MetadataAlreadyExists e -> {
+            // Previous call already succeeded — this is a duplicate invocation
+            log.info("Order {} already submitted", order.id());
+        }
+    }
+}
+```
+
+### Graceful Degradation
+
+When DynamoDB is unavailable, `MetadataWriteFailed` fires. Decide whether to proceed without correlation or abort:
+
+```java
+var result = helper.startFileTransfer(request, metadata);
+
+if (result instanceof SftpOperationResult.MetadataWriteFailed<StartFileTransferResponse> f) {
+    // Option A: Accept — transfer runs, no enriched event
+    log.warn("Proceeding without metadata for transfer {}", f.response().transferId());
+    trackManually(f.response().transferId(), metadata);
+
+    // Option B: Abort — if enriched events are critical to your workflow
+    // cancelOrCompensate(f.response().transferId());
+}
+```
 
 ## Cost Estimates
 

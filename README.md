@@ -2,6 +2,20 @@
 
 A framework that adds **business metadata correlation** to AWS Transfer Family SFTP Connector operations. It bridges the gap between your application's business context and the asynchronous events produced by SFTP Connector, delivering enriched events that carry your custom metadata alongside Transfer Family's native event data.
 
+## Problem & Motivation
+
+AWS Transfer Family SFTP Connector operations are **asynchronous** — you call `StartFileTransfer` and later receive an EventBridge event when the transfer completes. But that event only contains Transfer Family identifiers (`transfer-id`, `connector-id`, `status-code`). It carries **no business context**: which order triggered the transfer, which customer it belongs to, or what to do next.
+
+This forces you to build correlation infrastructure yourself:
+- Store a mapping between transfer IDs and your business data
+- Handle race conditions (events can arrive before your mapping is written)
+- Deal with multi-file fan-out (one API call → N events, no batch completion signal)
+- Detect orphans when events or metadata go missing
+
+This library solves all of that with a single CDK construct and a thin Java wrapper. You pass your metadata alongside the SDK call; the framework delivers enriched events with your metadata already joined.
+
+**Use this library when** you need to react to SFTP Connector completion events with business context (order IDs, customer references, workflow state). **Skip it** if you only need fire-and-forget file transfers with no downstream event processing.
+
 ## Key Features
 
 - **Metadata correlation** — Attach arbitrary JSON metadata to any SFTP Connector operation (file send, directory listing, move, delete)
@@ -39,31 +53,20 @@ try (SftpConnectorHelper helper = SftpConnectorHelper.builder().build()) {
         .sendFilePaths("/outbound/invoice-001.csv")
         .build();
 
-    String metadata = "{\"orderId\":\"ORD-001\",\"customer\":\"ACME\"}";
+    SftpOperationResult<StartFileTransferResponse> result =
+        helper.startFileTransfer(request, "{\"orderId\":\"ORD-001\",\"customer\":\"ACME\"}");
 
-    SftpOperationResult<StartFileTransferResponse> result = helper.startFileTransfer(request, metadata);
-
-    switch (result) {
-        case SftpOperationResult.Success<StartFileTransferResponse> s ->
-            System.out.println("Transfer started: " + s.response().transferId());
-        case SftpOperationResult.MetadataWriteFailed<StartFileTransferResponse> f ->
-            System.err.println("Transfer OK but metadata write failed: " + f.cause().getMessage());
-        case SftpOperationResult.MetadataAlreadyExists<StartFileTransferResponse> e ->
-            System.err.println("Duplicate metadata for job: " + e.jobId());
+    if (result instanceof SftpOperationResult.Success<StartFileTransferResponse> s) {
+        System.out.println("Transfer started: " + s.response().transferId());
     }
 }
 ```
 
-### Consume Enriched Events (Lambda)
+See [Getting Started](docs/GETTING_STARTED.md) for complete error handling and all operation types.
 
-```python
-def lambda_handler(event, context):
-    detail = event["detail"]
-    metadata = detail.get("_helper_metadata", {})  # injected by the joiner with your original metadata
-    order_id = metadata.get("orderId")
-    status = detail.get("status-code")
-    print(f"Order {order_id}: status={status}")
-```
+### Consume Enriched Events
+
+Your consumer receives the original Transfer Family event enriched with your metadata in `_helper_metadata`. See [Getting Started — Consume the Enriched Event](docs/GETTING_STARTED.md#scenario-2-consume-the-enriched-event) for event format and a complete consumer example.
 
 ## Performance
 
@@ -108,5 +111,6 @@ Run the benchmark: `make test-integration AWS_PROFILE=<profile> AWS_REGION=<regi
 
 ## Documentation
 
+- **[Getting Started](docs/GETTING_STARTED.md)** — Hands-on tutorial with progressive scenarios
 - **[Architecture](docs/ARCHITECTURE.md)** — System design, data flow, CDK construct reference, idempotency contract
 - **[User Guide](docs/USER_GUIDE.md)** — Full API reference, event format, operational runbook, troubleshooting, cost estimates

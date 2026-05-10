@@ -49,14 +49,16 @@ The SFTP Connector Helper framework correlates business metadata with AWS Transf
 
 ### Fan-Out Path (Multi-File Transfer)
 
-`StartFileTransfer` with N files produces N+1 events: one per file + one completion event. The framework handles this via:
+`StartFileTransfer` with N files produces N per-file events (each containing both `transfer-id` and `file-transfer-id`). There is no batch-level completion event. The framework handles this via:
 
 1. Java helper writes a **master record** with `jobId = transferId` and staggered TTL (base TTL + 1 hour, implemented in the Java helper's `writeMetadataAndReturn` method)
-2. Event Writer writes **per-file records** with `jobId = file-specific-id` and `transferId` attribute
+2. Event Writer writes **per-file records** with `jobId = file-transfer-id` and `transferId` attribute
 3. Joiner detects per-file records (has `eventResult` + `transferId`, no `metadata`) → reads master record via `GetItem`, copies metadata from master to per-file record
 4. Joiner detects master record (has `metadata`, no `eventResult`, no `transferId`) → fans out metadata to existing per-file records via GSI query
 
-For a multi-file transfer with N files, expect approximately 2N+2 DynamoDB write operations (1 master + N event-writer per-file + N metadata copies + 1 event-writer completion).
+The master record never receives an `eventResult` (Transfer Family does not emit a batch-level event). It expires via TTL and is handled by orphan detection branch 2 (GSI query confirms per-file records exist → no alert).
+
+For a multi-file transfer with N files, expect approximately 2N+1 DynamoDB write operations (1 master + N event-writer per-file + N metadata copies).
 
 ### Orphan Detection
 
