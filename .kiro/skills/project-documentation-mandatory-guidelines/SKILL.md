@@ -1,5 +1,5 @@
 ---
-name: docs-separation
+name: project-documentation-mandatory-guidelines
 description: Prevents content duplication and misplacement across project documentation files. Use when reading, writing, improving or reviewing README.md, docs/ARCHITECTURE.md, docs/USER_GUIDE.md, or docs/GETTING_STARTED.md. Do NOT use for general documentation writing.
 ---
 
