@@ -90,12 +90,40 @@ destroy: check-deploy-env
 
 test: test-java
 
-test-integration: check-deploy-env
-	CONNECTOR_ID=c-0123456789abcdef0 \
-	TABLE_NAME=sftp-connector-helper \
-	EVENT_BUS_NAME=sftp-connector-helper-bus \
-	TEST_S3_BUCKET=sftp-connector-helper-test-123456789012 \
-	REMOTE_DIR=REDACTED_PATH/test_sftp_connector \
+# Integration tests: requires a deployed stack and SFTP Connector configuration.
+#
+# Required environment variables (no defaults — must be set explicitly):
+#   CONNECTOR_ID   - Transfer Family SFTP Connector ID (e.g. c-0123456789abcdef0)
+#   TEST_S3_BUCKET - S3 bucket accessible by the connector for test file staging
+#   REMOTE_DIR     - Remote SFTP directory path used for test transfers
+#
+# Optional (auto-discovered from deployed stack if omitted):
+#   TABLE_NAME     - DynamoDB table name (default: sftp-connector-helper)
+#   EVENT_BUS_NAME - EventBridge bus name (default: sftp-connector-helper-bus)
+#
+# Example:
+#   make test-integration AWS_PROFILE=dev AWS_REGION=eu-central-1 \
+#     CONNECTOR_ID=c-0a1b2c3d4e5f67890 \
+#     TEST_S3_BUCKET=my-sftp-test-bucket \
+#     REMOTE_DIR=/upload/test
+
+CONNECTOR_ID ?=
+TEST_S3_BUCKET ?=
+REMOTE_DIR ?=
+TABLE_NAME ?= sftp-connector-helper
+EVENT_BUS_NAME ?= sftp-connector-helper-bus
+
+check-integration-env: check-deploy-env
+	@[ -n "$(CONNECTOR_ID)" ] || { echo "ERROR: CONNECTOR_ID is required. Set to your Transfer Family SFTP Connector ID (e.g. c-0a1b2c3d4e5f67890)"; exit 1; }
+	@[ -n "$(TEST_S3_BUCKET)" ] || { echo "ERROR: TEST_S3_BUCKET is required. Set to an S3 bucket accessible by the connector."; exit 1; }
+	@[ -n "$(REMOTE_DIR)" ] || { echo "ERROR: REMOTE_DIR is required. Set to the remote SFTP directory path for test transfers."; exit 1; }
+
+test-integration: check-integration-env
+	CONNECTOR_ID=$(CONNECTOR_ID) \
+	TABLE_NAME=$(TABLE_NAME) \
+	EVENT_BUS_NAME=$(EVENT_BUS_NAME) \
+	TEST_S3_BUCKET=$(TEST_S3_BUCKET) \
+	REMOTE_DIR=$(REMOTE_DIR) \
 	AWS_REGION=$(AWS_REGION) \
 	AWS_PROFILE=$(AWS_PROFILE) \
 	mvn verify -pl tests/integration/java -am
