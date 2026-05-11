@@ -47,11 +47,44 @@ A fact MUST appear in at most ONE file; cross-reference links replace repetition
 
 ## Documentation Review Procedure
 
-MUST spawn parallel subagents using the `subagent` tool with mode `blocking`. MUST NOT review files sequentially in the main agent context.
+### Change Discovery (Pre-Step)
 
-MUST use four parallel stages (one per documentation file) with no dependencies between them. 
+MUST execute before spawning review subagents. MUST run these commands in the main agent context (fast, <1 second):
+
+1. Get last modification date of each doc file:
+
+```bash
+git log -1 --format="%aI %H" -- README.md
+git log -1 --format="%aI %H" -- docs/GETTING_STARTED.md
+git log -1 --format="%aI %H" -- docs/ARCHITECTURE.md
+git log -1 --format="%aI %H" -- docs/USER_GUIDE.md
+```
+
+2. Compute the oldest date among the four results. Use it as `{SINCE_DATE}`.
+
+3. Get code commits since `{SINCE_DATE}` (excluding doc files):
+
+```bash
+git log --oneline --since="{SINCE_DATE}" -- . ':!README.md' ':!docs/'
+```
+
+4. Get changed files summary:
+
+```bash
+git diff --stat $(git log -1 --format=%H --before="{SINCE_DATE}")..HEAD -- . ':!README.md' ':!docs/'
+```
+
+5. Format the output as `{RECENT_CHANGES}` — a concise list of commit subjects and affected files grouped by area (Java helper, lambdas, CDK, tests).
+
+6. For each doc file, record its `{LAST_MODIFIED}` date from step 1.
+
+- If step 3 returns no commits, SHOULD inform the user that documentation is up-to-date with the codebase and ask whether to proceed with a full review anyway.
 
 ### Subagent Stages
+
+MUST spawn parallel subagents using the `subagent` tool with mode `blocking`. MUST NOT review files sequentially in the main agent context.
+
+MUST use five parallel stages (one per documentation file + link validation) with no dependencies between them.
 
 | Stage name | File | Role (from ownership table) |
 |------------|------|----------------------------|
@@ -62,10 +95,13 @@ MUST use four parallel stages (one per documentation file) with no dependencies 
 
 ### Per-File Review Prompt
 
-Each subagent MUST receive this prompt (substitute `{FILE}`, `{ROLE}`, `{MUST_CONTAIN}`, `{MUST_NOT_CONTAIN}` from the File Ownership Zones table):
+Each subagent MUST receive this prompt (substitute `{FILE}`, `{ROLE}`, `{MUST_CONTAIN}`, `{MUST_NOT_CONTAIN}` from the File Ownership Zones table, and `{LAST_MODIFIED}`, `{RECENT_CHANGES}` from the Change Discovery pre-step):
 
 ```
 Read {FILE} in full. Evaluate against these criteria:
+
+CONTEXT — Codebase changes since {FILE} was last updated ({LAST_MODIFIED}):
+{RECENT_CHANGES}
 
 1. OWNERSHIP VIOLATIONS: List any content that belongs in a different file per these rules:
    - {FILE} role: {ROLE}
@@ -83,7 +119,9 @@ Read {FILE} in full. Evaluate against these criteria:
 
 4. DUPLICATION CANDIDATES: Extract key phrases/facts that might also appear in other docs.
 
-Output a structured report with sections: VIOLATIONS, CROSS-REFS, QUALITY, DUPLICATION_CANDIDATES.
+5. STALENESS: Based on the recent changes above, flag documentation sections that are likely outdated or missing coverage for new/modified features. For each finding, cite the relevant commit(s).
+
+Output a structured report with sections: VIOLATIONS, CROSS-REFS, QUALITY, DUPLICATION_CANDIDATES, STALENESS.
 ```
 
 ### Verification

@@ -1,5 +1,5 @@
 ---
-name: javadoc-review
+name: javadoc-mandatory-guidelines
 description: 'Reviews, modifies, and maintains JavaDoc for the SFTP Connector Helper Library using focused multi-subagent orchestration. Use when reviewing JavaDoc quality, fixing JavaDoc issues, adding missing JavaDoc, or maintaining documentation accuracy after code changes. Do NOT use for non-JavaDoc documentation or general code review.'
 ---
 
