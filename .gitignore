@@ -34,3 +34,6 @@ chats.db
 .kiro/skills/bmad-*
 _bmad-output/
 _bmad/
+
+# Maven versions plugin
+pom.xml.versionsBackup
