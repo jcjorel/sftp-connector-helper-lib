@@ -85,17 +85,11 @@ try (SftpConnectorHelper helper = SftpConnectorHelper.builder().build()) {
         {"orderId":"ORD-42","customer":"ACME","priority":"high"}
         """;
 
-    SftpOperationResult<StartFileTransferResponse> result =
+    StartFileTransferResponse response =
         helper.startFileTransfer(request, metadata);
 
-    switch (result) {
-        case SftpOperationResult.Success<StartFileTransferResponse> s ->
-            System.out.println("Transfer started: " + s.response().transferId());
-        case SftpOperationResult.MetadataWriteFailed<StartFileTransferResponse> f ->
-            System.err.println("Transfer OK but metadata lost: " + f.cause().getMessage());
-        case SftpOperationResult.MetadataAlreadyExists<StartFileTransferResponse> e ->
-            System.err.println("Duplicate metadata for: " + e.jobId());
-    }
+    System.out.println("Transfer started: " + response.transferId());
+    // MetadataWriteException propagates if metadata write fails
 }
 ```
 
@@ -168,12 +162,10 @@ String metadata = """
     {"batchId":"BATCH-2026-05-10","fileCount":5,"source":"billing"}
     """;
 
-var result = helper.startFileTransfer(request, metadata);
+var response = helper.startFileTransfer(request, metadata);
 
-if (result instanceof SftpOperationResult.Success<StartFileTransferResponse> s) {
-    System.out.println("Batch transfer started: " + s.response().transferId());
-    // You will receive 5 separate enriched events, one per file
-}
+System.out.println("Batch transfer started: " + response.transferId());
+// You will receive 5 separate enriched events, one per file
 ```
 
 **Expected output**:
@@ -214,11 +206,9 @@ String metadata = """
     {"action":"retrieve","source":"partner-sftp","expectedFile":"invoice-101.csv"}
     """;
 
-var result = helper.startFileTransfer(request, metadata);
+var response = helper.startFileTransfer(request, metadata);
 
-if (result instanceof SftpOperationResult.Success<StartFileTransferResponse> s) {
-    System.out.println("Retrieve started: " + s.response().transferId());
-}
+System.out.println("Retrieve started: " + response.transferId());
 ```
 
 **Expected output**:
@@ -252,11 +242,9 @@ String metadata = """
     {"purpose":"poll-for-new-invoices","schedule":"hourly"}
     """;
 
-var result = helper.startDirectoryListing(request, metadata);
+var response = helper.startDirectoryListing(request, metadata);
 
-if (result instanceof SftpOperationResult.Success<StartDirectoryListingResponse> s) {
-    System.out.println("Listing started: " + s.response().listingId());
-}
+System.out.println("Listing started: " + response.listingId());
 ```
 
 When the enriched event arrives, use `DirectoryListingFilter` to extract matching files:
@@ -314,11 +302,9 @@ String metadata = """
     {"action":"archive","originalPath":"/incoming/invoice-101.csv","reason":"processed"}
     """;
 
-var result = helper.startRemoteMove(request, metadata);
+var response = helper.startRemoteMove(request, metadata);
 
-if (result instanceof SftpOperationResult.Success<StartRemoteMoveResponse> s) {
-    System.out.println("Move started: " + s.response().moveId());
-}
+System.out.println("Move started: " + response.moveId());
 ```
 
 **Expected output**:
@@ -348,11 +334,9 @@ String metadata = """
     {"action":"cleanup","retentionPolicy":"90-days-expired"}
     """;
 
-var result = helper.startRemoteDelete(request, metadata);
+var response = helper.startRemoteDelete(request, metadata);
 
-if (result instanceof SftpOperationResult.Success<StartRemoteDeleteResponse> s) {
-    System.out.println("Delete started: " + s.response().deleteId());
-}
+System.out.println("Delete started: " + response.deleteId());
 ```
 
 **Expected output**:
@@ -364,39 +348,26 @@ Delete started: d-456abc789def012
 
 ---
 
-## Scenario 8: Handle Result Types Correctly
+## Scenario 8: Handle Exceptions Correctly
 
-**Goal**: Understand and handle all three result types in production code.
+**Goal**: Understand and handle the exception contract in production code.
 
 ```java
-var result = helper.startFileTransfer(request, metadata);
-
-switch (result) {
-    case SftpOperationResult.Success<StartFileTransferResponse> s -> {
-        // Happy path: transfer running + metadata correlated
-        log.info("Transfer {} will produce enriched event", s.response().transferId());
-    }
-
-    case SftpOperationResult.MetadataWriteFailed<StartFileTransferResponse> f -> {
-        // Transfer IS running, but no enriched event will be produced.
-        // The transfer-id is still available for manual tracking.
-        log.warn("Transfer {} running but metadata write failed: {}",
-            f.response().transferId(), f.cause().getMessage());
-        // Consider: retry at application level, or track manually
-    }
-
-    case SftpOperationResult.MetadataAlreadyExists<StartFileTransferResponse> e -> {
-        // A previous call already wrote metadata for this job ID.
-        // This means you called the helper twice — the SECOND SDK call started
-        // a NEW transfer that won't have metadata correlation.
-        log.error("Duplicate call detected for job {}. "
-            + "The new transfer {} has no metadata.", e.jobId(), e.response().transferId());
-        // Fix: don't retry the helper method; retry at a higher level
-    }
+try {
+    StartFileTransferResponse response = helper.startFileTransfer(request, metadata);
+    // Happy path: transfer running + metadata correlated
+    log.info("Transfer {} will produce enriched event", response.transferId());
+} catch (MetadataWriteException e) {
+    // Transfer IS running, but no enriched event will be produced.
+    // The SDK response is available for manual tracking.
+    var transferResponse = (StartFileTransferResponse) e.getSdkResponse();
+    log.warn("Transfer {} running but metadata write failed: {}",
+        transferResponse.transferId(), e.getMessage());
+    // Consider: retry at application level, or track manually
 }
 ```
 
-**Key insight**: The SDK call is **not** idempotent — each call starts a new transfer. See [User Guide — Best Practices](USER_GUIDE.md#best-practices) for retry patterns and the full idempotency contract.
+**Key insight**: The SDK call is **not** idempotent — each call starts a new transfer. See [User Guide — Best Practices](USER_GUIDE.md#best-practices) for retry patterns and the full exception contract.
 
 ---
 
@@ -447,12 +418,10 @@ FileTransferOptions options = FileTransferOptions.builder()
     .batchTimeout(Duration.ofMinutes(30))  // timeout if not all files complete within 30 min
     .build();
 
-var result = helper.startFileTransfer(request, metadata, options);
+var response = helper.startFileTransfer(request, metadata, options);
 
-if (result instanceof SftpOperationResult.Success<StartFileTransferResponse> s) {
-    System.out.println("Batch transfer started: " + s.response().transferId());
-    // You will receive ONE batch completion event when all 3 files are done
-}
+System.out.println("Batch transfer started: " + response.transferId());
+// You will receive ONE batch completion event when all 3 files are done
 ```
 
 **Expected output**:

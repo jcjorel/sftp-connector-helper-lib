@@ -49,15 +49,14 @@ class SftpConnectorHelperRemoteMoveTest {
     }
 
     @Test
-    void startRemoteMove_success_returnsSuccess() {
+    void startRemoteMove_success_returnsResponse() {
         StartRemoteMoveResponse response = StartRemoteMoveResponse.builder()
                 .moveId(MOVE_ID).build();
         when(transferClient.startRemoteMove(sdkRequest)).thenReturn(response);
 
-        SftpOperationResult<StartRemoteMoveResponse> result = helper.startRemoteMove(sdkRequest, METADATA);
+        StartRemoteMoveResponse result = helper.startRemoteMove(sdkRequest, METADATA);
 
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        assertEquals(response, ((SftpOperationResult.Success<StartRemoteMoveResponse>) result).response());
+        assertSame(response, result);
     }
 
     @Test
@@ -73,36 +72,35 @@ class SftpConnectorHelperRemoteMoveTest {
     }
 
     @Test
-    void startRemoteMove_conditionalCheckFails_returnsMetadataAlreadyExists() {
+    void startRemoteMove_conditionalCheckFails_throwsMetadataWriteException() {
         StartRemoteMoveResponse response = StartRemoteMoveResponse.builder()
                 .moveId(MOVE_ID).build();
         when(transferClient.startRemoteMove(sdkRequest)).thenReturn(response);
         when(dynamoDbClient.updateItem(any(UpdateItemRequest.class)))
                 .thenThrow(ConditionalCheckFailedException.builder().message("exists").build());
 
-        SftpOperationResult<StartRemoteMoveResponse> result = helper.startRemoteMove(sdkRequest, METADATA);
+        MetadataWriteException ex = assertThrows(MetadataWriteException.class,
+                () -> helper.startRemoteMove(sdkRequest, METADATA));
 
-        assertInstanceOf(SftpOperationResult.MetadataAlreadyExists.class, result);
-        var r = (SftpOperationResult.MetadataAlreadyExists<StartRemoteMoveResponse>) result;
-        assertEquals(response, r.response());
-        assertEquals(MOVE_ID, r.jobId());
+        assertEquals(MOVE_ID, ex.getJobId());
+        assertSame(response, ex.getSdkResponse());
+        assertTrue(ex.getMessage().contains("Unexpected duplicate metadata"));
     }
 
     @Test
-    void startRemoteMove_dynamoThrows_returnsMetadataWriteFailed() {
+    void startRemoteMove_dynamoThrows_throwsMetadataWriteException() {
         StartRemoteMoveResponse response = StartRemoteMoveResponse.builder()
                 .moveId(MOVE_ID).build();
         when(transferClient.startRemoteMove(sdkRequest)).thenReturn(response);
         DynamoDbException dynamoEx = (DynamoDbException) DynamoDbException.builder().message("err").build();
         when(dynamoDbClient.updateItem(any(UpdateItemRequest.class))).thenThrow(dynamoEx);
 
-        SftpOperationResult<StartRemoteMoveResponse> result = helper.startRemoteMove(sdkRequest, METADATA);
+        MetadataWriteException ex = assertThrows(MetadataWriteException.class,
+                () -> helper.startRemoteMove(sdkRequest, METADATA));
 
-        assertInstanceOf(SftpOperationResult.MetadataWriteFailed.class, result);
-        var r = (SftpOperationResult.MetadataWriteFailed<StartRemoteMoveResponse>) result;
-        assertEquals(response, r.response());
-        assertEquals(MOVE_ID, r.jobId());
-        assertSame(dynamoEx, r.cause());
+        assertEquals(MOVE_ID, ex.getJobId());
+        assertSame(response, ex.getSdkResponse());
+        assertSame(dynamoEx, ex.getCause());
     }
 
     @Test

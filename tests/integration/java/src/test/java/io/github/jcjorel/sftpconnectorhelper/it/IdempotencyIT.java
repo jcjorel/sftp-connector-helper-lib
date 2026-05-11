@@ -1,11 +1,9 @@
 package io.github.jcjorel.sftpconnectorhelper.it;
 
-import io.github.jcjorel.sftpconnectorhelper.SftpOperationResult;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.transfer.model.StartDirectoryListingRequest;
-import software.amazon.awssdk.services.transfer.model.StartDirectoryListingResponse;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -30,16 +28,14 @@ class IdempotencyIT extends IntegrationTestBase {
                 .build();
 
         // First call — should succeed
-        var result1 = helper.startDirectoryListing(request, metadata1);
-        assertInstanceOf(SftpOperationResult.Success.class, result1);
-        String listingId = ((SftpOperationResult.Success<StartDirectoryListingResponse>) result1).response().listingId();
+        var response1 = helper.startDirectoryListing(request, metadata1);
+        String listingId = response1.listingId();
         trackForCleanup(listingId);
         LOG.info("First call succeeded: listingId={}", listingId);
 
         // Second call produces a NEW listingId (different SDK call)
-        var result2 = helper.startDirectoryListing(request, metadata2);
-        assertInstanceOf(SftpOperationResult.Success.class, result2);
-        String listingId2 = ((SftpOperationResult.Success<StartDirectoryListingResponse>) result2).response().listingId();
+        var response2 = helper.startDirectoryListing(request, metadata2);
+        String listingId2 = response2.listingId();
         trackForCleanup(listingId2);
         LOG.info("Second call succeeded: listingId={}", listingId2);
 

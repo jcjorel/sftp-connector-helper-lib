@@ -3,7 +3,6 @@ package io.github.jcjorel.sftpconnectorhelper.it;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.jcjorel.sftpconnectorhelper.EventEmissionMode;
 import io.github.jcjorel.sftpconnectorhelper.FileTransferOptions;
-import io.github.jcjorel.sftpconnectorhelper.SftpOperationResult;
 import org.junit.jupiter.api.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,13 +86,11 @@ class LatencyBenchmarkIT extends IntegrationTestBase {
         return System.currentTimeMillis() - start;
     }
 
-    @SuppressWarnings("unchecked")
-    private <R> long timeHelper(Supplier<SftpOperationResult<R>> call, Function<R, String> idExtractor,
+    private <R> long timeHelper(Supplier<R> call, Function<R, String> idExtractor,
                                 String idField, int count, Duration timeout) {
         long start = System.currentTimeMillis();
         var result = call.get();
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        String jobId = idExtractor.apply(((SftpOperationResult.Success<R>) result).response());
+        String jobId = idExtractor.apply(result);
         trackForCleanup(jobId);
         if (count == 1) assertStatusCompleted(pollForEnrichedEvent(idField, jobId, timeout));
         else pollForAllEnrichedEvents(idField, jobId, count, timeout).forEach(this::assertStatusCompleted);

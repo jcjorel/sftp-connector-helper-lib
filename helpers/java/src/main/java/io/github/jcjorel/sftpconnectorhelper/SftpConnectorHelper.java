@@ -15,6 +15,7 @@ import software.amazon.awssdk.services.transfer.model.StartRemoteDeleteRequest;
 import software.amazon.awssdk.services.transfer.model.StartRemoteDeleteResponse;
 import software.amazon.awssdk.services.transfer.model.StartRemoteMoveRequest;
 import software.amazon.awssdk.services.transfer.model.StartRemoteMoveResponse;
+import software.amazon.awssdk.services.transfer.model.TransferResponse;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -34,6 +35,19 @@ import java.util.Map;
  * <p><b>Thread Safety:</b> This class is thread-safe. It holds immutable configuration and
  * thread-safe AWS SDK clients. Multiple threads may invoke operations concurrently.</p>
  *
+ * <h2>Exception Contract</h2>
+ * <table>
+ *   <caption>Exception behavior for all operations</caption>
+ *   <tr><th>Condition</th><th>Behavior</th></tr>
+ *   <tr><td>Metadata validation fails</td><td>{@link IllegalArgumentException}</td></tr>
+ *   <tr><td>Request is null</td><td>{@link IllegalArgumentException}</td></tr>
+ *   <tr><td>SDK call fails (network, throttle, auth)</td><td>{@link software.amazon.awssdk.core.exception.SdkException} propagates</td></tr>
+ *   <tr><td>SDK returns null/empty job ID</td><td>{@link IllegalStateException}</td></tr>
+ *   <tr><td>DynamoDB write fails (throttle, error)</td><td>{@link MetadataWriteException}</td></tr>
+ *   <tr><td>DynamoDB condition check fails</td><td>{@link MetadataWriteException} with "Unexpected duplicate metadata" message</td></tr>
+ *   <tr><td>batchTimeout &gt;= effective TTL</td><td>{@link IllegalArgumentException}</td></tr>
+ * </table>
+ *
  * <h2>Usage</h2>
  * <pre>{@code
  * try (SftpConnectorHelper helper = SftpConnectorHelper.builder().build()) {
@@ -41,13 +55,13 @@ import java.util.Map;
  *         .connectorId("c-1234567890abcdef0")
  *         .sendFilePaths("/outbound/invoice.csv")
  *         .build();
- *     SftpOperationResult<StartFileTransferResponse> result =
+ *     StartFileTransferResponse response =
  *         helper.startFileTransfer(request, "{\"orderId\":\"ORD-001\"}");
  * }
  * }</pre>
  *
  * @see SftpConnectorHelperBuilder
- * @see SftpOperationResult
+ * @see MetadataWriteException
  */
 public final class SftpConnectorHelper implements AutoCloseable {
 
@@ -136,13 +150,13 @@ public final class SftpConnectorHelper implements AutoCloseable {
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
      *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
-     * @return the operation result indicating success or specific failure mode
+     * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
-     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws MetadataWriteException if the DynamoDB metadata write fails after a successful SDK call
      * @throws software.amazon.awssdk.core.exception.SdkException
      *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
-    public SftpOperationResult<StartFileTransferResponse> startFileTransfer(StartFileTransferRequest request, String metadata) {
+    public StartFileTransferResponse startFileTransfer(StartFileTransferRequest request, String metadata) {
         return startFileTransfer(request, metadata, null);
     }
 
@@ -159,13 +173,13 @@ public final class SftpConnectorHelper implements AutoCloseable {
      *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
      * @param options  event emission options, or {@code null} for default behavior
-     * @return the operation result indicating success or specific failure mode
+     * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
-     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws MetadataWriteException if the DynamoDB metadata write fails after a successful SDK call
      * @throws software.amazon.awssdk.core.exception.SdkException
      *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
-    public SftpOperationResult<StartFileTransferResponse> startFileTransfer(StartFileTransferRequest request, String metadata, FileTransferOptions options) {
+    public StartFileTransferResponse startFileTransfer(StartFileTransferRequest request, String metadata, FileTransferOptions options) {
         if (request == null) {
             throw new IllegalArgumentException("StartFileTransferRequest must not be null");
         }
@@ -175,7 +189,8 @@ public final class SftpConnectorHelper implements AutoCloseable {
         FileTransferOptions effective = (options != null) ? options : FileTransferOptions.defaults();
         EventEmissionMode mode = effective.emissionMode();
         if (mode == EventEmissionMode.INDIVIDUAL_FILE_EVENTS_ONLY) {
-            return writeMetadataAndReturn(response, response.transferId(), metadata, true);
+            writeMetadata(response, response.transferId(), metadata, true);
+            return response;
         }
 
         // Validate batchTimeout < effective TTL
@@ -190,7 +205,8 @@ public final class SftpConnectorHelper implements AutoCloseable {
             }
         }
 
-        return writeMetadataWithBatchFields(response, response.transferId(), metadata, request, mode, batchTimeout);
+        writeMetadataWithBatchFields(response, response.transferId(), metadata, request, mode, batchTimeout);
+        return response;
     }
 
     /**
@@ -200,19 +216,20 @@ public final class SftpConnectorHelper implements AutoCloseable {
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
      *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
-     * @return the operation result indicating success or specific failure mode
+     * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
-     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws MetadataWriteException if the DynamoDB metadata write fails after a successful SDK call
      * @throws software.amazon.awssdk.core.exception.SdkException
      *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
-    public SftpOperationResult<StartDirectoryListingResponse> startDirectoryListing(StartDirectoryListingRequest request, String metadata) {
+    public StartDirectoryListingResponse startDirectoryListing(StartDirectoryListingRequest request, String metadata) {
         if (request == null) {
             throw new IllegalArgumentException("StartDirectoryListingRequest must not be null");
         }
         validateMetadata(metadata);
         StartDirectoryListingResponse response = transferClient.startDirectoryListing(request);
-        return writeMetadataAndReturn(response, response.listingId(), metadata, false);
+        writeMetadata(response, response.listingId(), metadata, false);
+        return response;
     }
 
     /**
@@ -222,19 +239,20 @@ public final class SftpConnectorHelper implements AutoCloseable {
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
      *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
-     * @return the operation result indicating success or specific failure mode
+     * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
-     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws MetadataWriteException if the DynamoDB metadata write fails after a successful SDK call
      * @throws software.amazon.awssdk.core.exception.SdkException
      *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
-    public SftpOperationResult<StartRemoteMoveResponse> startRemoteMove(StartRemoteMoveRequest request, String metadata) {
+    public StartRemoteMoveResponse startRemoteMove(StartRemoteMoveRequest request, String metadata) {
         if (request == null) {
             throw new IllegalArgumentException("StartRemoteMoveRequest must not be null");
         }
         validateMetadata(metadata);
         StartRemoteMoveResponse response = transferClient.startRemoteMove(request);
-        return writeMetadataAndReturn(response, response.moveId(), metadata, false);
+        writeMetadata(response, response.moveId(), metadata, false);
+        return response;
     }
 
     /**
@@ -244,22 +262,23 @@ public final class SftpConnectorHelper implements AutoCloseable {
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
      *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
-     * @return the operation result indicating success or specific failure mode
+     * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
-     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws MetadataWriteException if the DynamoDB metadata write fails after a successful SDK call
      * @throws software.amazon.awssdk.core.exception.SdkException
      *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
-    public SftpOperationResult<StartRemoteDeleteResponse> startRemoteDelete(StartRemoteDeleteRequest request, String metadata) {
+    public StartRemoteDeleteResponse startRemoteDelete(StartRemoteDeleteRequest request, String metadata) {
         if (request == null) {
             throw new IllegalArgumentException("StartRemoteDeleteRequest must not be null");
         }
         validateMetadata(metadata);
         StartRemoteDeleteResponse response = transferClient.startRemoteDelete(request);
-        return writeMetadataAndReturn(response, response.deleteId(), metadata, false);
+        writeMetadata(response, response.deleteId(), metadata, false);
+        return response;
     }
 
-    private <T> SftpOperationResult<T> writeMetadataAndReturn(T response, String jobId, String metadata, boolean staggerTtl) {
+    private void writeMetadata(TransferResponse response, String jobId, String metadata, boolean staggerTtl) {
         if (jobId == null || jobId.isEmpty()) {
             throw new IllegalStateException("SDK response returned null or empty job ID");
         }
@@ -279,15 +298,16 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
         try {
             dynamoDbClient.updateItem(updateRequest);
-            return new SftpOperationResult.Success<>(response);
         } catch (ConditionalCheckFailedException e) {
-            return new SftpOperationResult.MetadataAlreadyExists<>(response, jobId);
+            throw new MetadataWriteException(
+                    "Unexpected duplicate metadata for jobId: " + jobId, jobId, response, e);
         } catch (DynamoDbException e) {
-            return new SftpOperationResult.MetadataWriteFailed<>(response, jobId, e);
+            throw new MetadataWriteException(
+                    "Failed to write metadata for jobId: " + jobId, jobId, response, e);
         }
     }
 
-    private SftpOperationResult<StartFileTransferResponse> writeMetadataWithBatchFields(
+    private void writeMetadataWithBatchFields(
             StartFileTransferResponse response, String jobId, String metadata,
             StartFileTransferRequest request, EventEmissionMode mode, Duration batchTimeout) {
         if (jobId == null || jobId.isEmpty()) {
@@ -339,11 +359,12 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
         try {
             dynamoDbClient.updateItem(updateRequest);
-            return new SftpOperationResult.Success<>(response);
         } catch (ConditionalCheckFailedException e) {
-            return new SftpOperationResult.MetadataAlreadyExists<>(response, jobId);
+            throw new MetadataWriteException(
+                    "Unexpected duplicate metadata for jobId: " + jobId, jobId, response, e);
         } catch (DynamoDbException e) {
-            return new SftpOperationResult.MetadataWriteFailed<>(response, jobId, e);
+            throw new MetadataWriteException(
+                    "Failed to write metadata for jobId: " + jobId, jobId, response, e);
         }
     }
 

@@ -1,7 +1,6 @@
 package io.github.jcjorel.sftpconnectorhelper.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.github.jcjorel.sftpconnectorhelper.SftpOperationResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -10,9 +9,7 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.transfer.model.StartFileTransferRequest;
-import software.amazon.awssdk.services.transfer.model.StartFileTransferResponse;
 import software.amazon.awssdk.services.transfer.model.StartRemoteDeleteRequest;
-import software.amazon.awssdk.services.transfer.model.StartRemoteDeleteResponse;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -45,9 +42,8 @@ class StartRemoteDeleteIT extends IntegrationTestBase {
                 .sendFilePaths("/" + TEST_S3_BUCKET + "/" + testFileKey)
                 .remoteDirectoryPath(REMOTE_DIR)
                 .build();
-        var sendResult = helper.startFileTransfer(sendReq, "{\"setup\":\"delete-test\"}");
-        assertInstanceOf(SftpOperationResult.Success.class, sendResult);
-        String transferId = ((SftpOperationResult.Success<StartFileTransferResponse>) sendResult).response().transferId();
+        var sendResponse = helper.startFileTransfer(sendReq, "{\"setup\":\"delete-test\"}");
+        String transferId = sendResponse.transferId();
         jobIdsToCleanup.add(transferId);
         LOG.info("Setup transfer started: transferId={}. Waiting for completion via event polling...", transferId);
 
@@ -69,11 +65,9 @@ class StartRemoteDeleteIT extends IntegrationTestBase {
                 .deletePath(deletePath)
                 .build();
 
-        var result = helper.startRemoteDelete(request, metadata);
+        var response = helper.startRemoteDelete(request, metadata);
 
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        var success = (SftpOperationResult.Success<StartRemoteDeleteResponse>) result;
-        String deleteId = success.response().deleteId();
+        String deleteId = response.deleteId();
         assertNotNull(deleteId);
         assertFalse(deleteId.isBlank());
         LOG.info("Remote delete started. deleteId={}", deleteId);

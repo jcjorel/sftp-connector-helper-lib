@@ -1,7 +1,6 @@
 package io.github.jcjorel.sftpconnectorhelper.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.github.jcjorel.sftpconnectorhelper.SftpOperationResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -10,7 +9,6 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.transfer.model.StartFileTransferRequest;
-import software.amazon.awssdk.services.transfer.model.StartFileTransferResponse;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -45,11 +43,9 @@ class StartFileTransferIT extends IntegrationTestBase {
                 .remoteDirectoryPath(REMOTE_DIR)
                 .build();
 
-        var result = helper.startFileTransfer(request, metadata);
+        var response = helper.startFileTransfer(request, metadata);
 
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        var success = (SftpOperationResult.Success<StartFileTransferResponse>) result;
-        String transferId = success.response().transferId();
+        String transferId = response.transferId();
         assertNotNull(transferId);
         assertFalse(transferId.isBlank());
         LOG.info("File transfer started. transferId={}", transferId);

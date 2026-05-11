@@ -49,15 +49,14 @@ class SftpConnectorHelperDirectoryListingTest {
     }
 
     @Test
-    void startDirectoryListing_success_returnsSuccess() {
+    void startDirectoryListing_success_returnsResponse() {
         StartDirectoryListingResponse response = StartDirectoryListingResponse.builder()
                 .listingId(LISTING_ID).build();
         when(transferClient.startDirectoryListing(sdkRequest)).thenReturn(response);
 
-        SftpOperationResult<StartDirectoryListingResponse> result = helper.startDirectoryListing(sdkRequest, METADATA);
+        StartDirectoryListingResponse result = helper.startDirectoryListing(sdkRequest, METADATA);
 
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        assertEquals(response, ((SftpOperationResult.Success<StartDirectoryListingResponse>) result).response());
+        assertSame(response, result);
     }
 
     @Test
@@ -73,36 +72,35 @@ class SftpConnectorHelperDirectoryListingTest {
     }
 
     @Test
-    void startDirectoryListing_conditionalCheckFails_returnsMetadataAlreadyExists() {
+    void startDirectoryListing_conditionalCheckFails_throwsMetadataWriteException() {
         StartDirectoryListingResponse response = StartDirectoryListingResponse.builder()
                 .listingId(LISTING_ID).build();
         when(transferClient.startDirectoryListing(sdkRequest)).thenReturn(response);
         when(dynamoDbClient.updateItem(any(UpdateItemRequest.class)))
                 .thenThrow(ConditionalCheckFailedException.builder().message("exists").build());
 
-        SftpOperationResult<StartDirectoryListingResponse> result = helper.startDirectoryListing(sdkRequest, METADATA);
+        MetadataWriteException ex = assertThrows(MetadataWriteException.class,
+                () -> helper.startDirectoryListing(sdkRequest, METADATA));
 
-        assertInstanceOf(SftpOperationResult.MetadataAlreadyExists.class, result);
-        var r = (SftpOperationResult.MetadataAlreadyExists<StartDirectoryListingResponse>) result;
-        assertEquals(response, r.response());
-        assertEquals(LISTING_ID, r.jobId());
+        assertEquals(LISTING_ID, ex.getJobId());
+        assertSame(response, ex.getSdkResponse());
+        assertTrue(ex.getMessage().contains("Unexpected duplicate metadata"));
     }
 
     @Test
-    void startDirectoryListing_dynamoThrows_returnsMetadataWriteFailed() {
+    void startDirectoryListing_dynamoThrows_throwsMetadataWriteException() {
         StartDirectoryListingResponse response = StartDirectoryListingResponse.builder()
                 .listingId(LISTING_ID).build();
         when(transferClient.startDirectoryListing(sdkRequest)).thenReturn(response);
         DynamoDbException dynamoEx = (DynamoDbException) DynamoDbException.builder().message("err").build();
         when(dynamoDbClient.updateItem(any(UpdateItemRequest.class))).thenThrow(dynamoEx);
 
-        SftpOperationResult<StartDirectoryListingResponse> result = helper.startDirectoryListing(sdkRequest, METADATA);
+        MetadataWriteException ex = assertThrows(MetadataWriteException.class,
+                () -> helper.startDirectoryListing(sdkRequest, METADATA));
 
-        assertInstanceOf(SftpOperationResult.MetadataWriteFailed.class, result);
-        var r = (SftpOperationResult.MetadataWriteFailed<StartDirectoryListingResponse>) result;
-        assertEquals(response, r.response());
-        assertEquals(LISTING_ID, r.jobId());
-        assertSame(dynamoEx, r.cause());
+        assertEquals(LISTING_ID, ex.getJobId());
+        assertSame(response, ex.getSdkResponse());
+        assertSame(dynamoEx, ex.getCause());
     }
 
     @Test

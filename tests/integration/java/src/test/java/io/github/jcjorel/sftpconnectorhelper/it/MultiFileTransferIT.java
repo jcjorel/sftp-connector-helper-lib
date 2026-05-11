@@ -3,7 +3,6 @@ package io.github.jcjorel.sftpconnectorhelper.it;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.github.jcjorel.sftpconnectorhelper.EventEmissionMode;
 import io.github.jcjorel.sftpconnectorhelper.FileTransferOptions;
-import io.github.jcjorel.sftpconnectorhelper.SftpOperationResult;
 import org.junit.jupiter.api.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,7 +10,6 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.transfer.model.StartFileTransferRequest;
-import software.amazon.awssdk.services.transfer.model.StartFileTransferResponse;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -63,10 +61,8 @@ class MultiFileTransferIT extends IntegrationTestBase {
                 .remoteDirectoryPath(REMOTE_DIR)
                 .build();
 
-        var result = helper.startFileTransfer(request, metadata);
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        var success = (SftpOperationResult.Success<StartFileTransferResponse>) result;
-        String transferId = success.response().transferId();
+        var response = helper.startFileTransfer(request, metadata);
+        String transferId = response.transferId();
         assertNotNull(transferId);
         LOG.info("Multi-file send started. transferId={}", transferId);
         trackForCleanup(transferId);
@@ -157,10 +153,8 @@ class MultiFileTransferIT extends IntegrationTestBase {
                 .localDirectoryPath(localDir)
                 .build();
 
-        var result = helper.startFileTransfer(retrieveReq, metadata);
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        var success = (SftpOperationResult.Success<StartFileTransferResponse>) result;
-        String transferId = success.response().transferId();
+        var response = helper.startFileTransfer(retrieveReq, metadata);
+        String transferId = response.transferId();
         assertNotNull(transferId);
         LOG.info("Multi-file retrieve started. transferId={}", transferId);
         trackForCleanup(transferId);
@@ -242,9 +236,7 @@ class MultiFileTransferIT extends IntegrationTestBase {
                 .build();
 
         var result = helper.startFileTransfer(request, metadata, options);
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        var success = (SftpOperationResult.Success<StartFileTransferResponse>) result;
-        String transferId = success.response().transferId();
+        String transferId = result.transferId();
         assertNotNull(transferId);
         LOG.info("Batch-only send started. transferId={}", transferId);
         trackForCleanup(transferId);
@@ -317,9 +309,7 @@ class MultiFileTransferIT extends IntegrationTestBase {
                 .build();
 
         var result = helper.startFileTransfer(retrieveReq, metadata, options);
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        var success = (SftpOperationResult.Success<StartFileTransferResponse>) result;
-        String transferId = success.response().transferId();
+        String transferId = result.transferId();
         assertNotNull(transferId);
         LOG.info("Batch-only retrieve started. transferId={}", transferId);
         trackForCleanup(transferId);
@@ -379,9 +369,7 @@ class MultiFileTransferIT extends IntegrationTestBase {
                 .build();
 
         var result = helper.startFileTransfer(request, metadata, options);
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        var success = (SftpOperationResult.Success<StartFileTransferResponse>) result;
-        String transferId = success.response().transferId();
+        String transferId = result.transferId();
         assertNotNull(transferId);
         LOG.info("Dual-emission send started. transferId={}", transferId);
         trackForCleanup(transferId);

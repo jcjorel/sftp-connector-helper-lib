@@ -25,10 +25,10 @@ All operations follow the same pattern: validate metadata (throws `IllegalArgume
 
 | Method | SDK Request Type | Returns |
 |--------|-----------------|---------|
-| `startFileTransfer(request, metadata)` | `StartFileTransferRequest` | `SftpOperationResult<StartFileTransferResponse>` |
-| `startDirectoryListing(request, metadata)` | `StartDirectoryListingRequest` | `SftpOperationResult<StartDirectoryListingResponse>` |
-| `startRemoteMove(request, metadata)` | `StartRemoteMoveRequest` | `SftpOperationResult<StartRemoteMoveResponse>` |
-| `startRemoteDelete(request, metadata)` | `StartRemoteDeleteRequest` | `SftpOperationResult<StartRemoteDeleteResponse>` |
+| `startFileTransfer(request, metadata)` | `StartFileTransferRequest` | `StartFileTransferResponse` |
+| `startDirectoryListing(request, metadata)` | `StartDirectoryListingRequest` | `StartDirectoryListingResponse` |
+| `startRemoteMove(request, metadata)` | `StartRemoteMoveRequest` | `StartRemoteMoveResponse` |
+| `startRemoteDelete(request, metadata)` | `StartRemoteDeleteRequest` | `StartRemoteDeleteResponse` |
 
 > **Note**: `startFileTransfer` handles multi-file fan-out automatically. See [Architecture — Fan-Out Path](ARCHITECTURE.md#fan-out-path-multi-file-transfer) for internal details.
 
@@ -42,7 +42,7 @@ FileTransferOptions options = FileTransferOptions.builder()
     .batchTimeout(Duration.ofMinutes(30))  // optional: default is 1 hour
     .build();
 
-SftpOperationResult<StartFileTransferResponse> result =
+StartFileTransferResponse response =
     helper.startFileTransfer(request, metadata, options);
 ```
 
@@ -50,7 +50,7 @@ The `startFileTransfer` method accepts an optional third parameter:
 
 | Method | SDK Request Type | Returns |
 |--------|-----------------|---------|
-| `startFileTransfer(request, metadata, options)` | `StartFileTransferRequest` | `SftpOperationResult<StartFileTransferResponse>` |
+| `startFileTransfer(request, metadata, options)` | `StartFileTransferRequest` | `StartFileTransferResponse` |
 
 **`EventEmissionMode`** controls which events are published:
 
@@ -74,19 +74,34 @@ The timeout is ignored when `emissionMode` is `INDIVIDUAL_FILE_EVENTS_ONLY` (no 
 
 > **Constraint**: `batchTimeout` must be less than `ttlDuration + 1 hour` (the effective record TTL). Otherwise the DynamoDB record may expire before the timeout fires, and an `IllegalArgumentException` is thrown at call time.
 
-### Result Types
+### Exception Contract
+
+All operations throw on failure instead of returning result variants:
+
+| Condition | Exception |
+|-----------|-----------|
+| Metadata validation fails | `IllegalArgumentException` |
+| Request is null | `IllegalArgumentException` |
+| SDK call fails (network, throttle, auth) | `SdkException` propagates |
+| SDK returns null/empty job ID | `IllegalStateException` |
+| DynamoDB write fails (throttle, error) | `MetadataWriteException` |
+| DynamoDB condition check fails | `MetadataWriteException` with "Unexpected duplicate metadata" message |
+| `batchTimeout >= effective TTL` | `IllegalArgumentException` |
+
+`MetadataWriteException` carries:
+- `getJobId()` — the transfer/listing/move/delete ID
+- `getSdkResponse()` — the raw SDK response (cast to the concrete type matching the method called)
+- `getCause()` — the underlying DynamoDB exception
 
 ```java
-sealed interface SftpOperationResult<T> {
-    record Success<T>(T response) implements SftpOperationResult<T> {}
-    record MetadataWriteFailed<T>(T response, String jobId, Exception cause) implements SftpOperationResult<T> {}
-    record MetadataAlreadyExists<T>(T response, String jobId) implements SftpOperationResult<T> {}
+try {
+    StartFileTransferResponse response = helper.startFileTransfer(request, metadata);
+    System.out.println("Transfer: " + response.transferId());
+} catch (MetadataWriteException e) {
+    // Transfer is in progress — proceed without enriched events
+    log.warn("Transfer {} started but metadata lost", e.getJobId(), e);
 }
 ```
-
-- **Success** — SDK call + metadata write both succeeded
-- **MetadataWriteFailed** — Transfer is in progress but metadata won't appear in enriched events
-- **MetadataAlreadyExists** — Conditional write failed; metadata was already written for this jobId
 
 ### Metadata Format
 
@@ -424,45 +439,44 @@ The SDK call is not idempotent — retrying the helper starts a **new** transfer
 ```java
 // ✗ WRONG — retrying the helper creates duplicate transfers
 for (int i = 0; i < 3; i++) {
-    var result = helper.startFileTransfer(request, metadata);
-    if (result instanceof SftpOperationResult.Success) break;
+    try {
+        helper.startFileTransfer(request, metadata);
+        break;
+    } catch (MetadataWriteException e) { /* don't retry */ }
 }
 
 // ✓ CORRECT — retry the business operation with idempotency at your layer
 public void processOrder(Order order) {
     if (alreadySubmitted(order.id())) return; // your idempotency check
 
-    var result = helper.startFileTransfer(request, metadata);
-    switch (result) {
-        case SftpOperationResult.Success s -> markSubmitted(order.id(), s.response().transferId());
-        case SftpOperationResult.MetadataWriteFailed f -> {
-            // Transfer is running but won't produce enriched event.
-            // Log for manual reconciliation; don't retry.
-            log.warn("Transfer {} has no metadata correlation", f.response().transferId());
-            markSubmitted(order.id(), f.response().transferId());
-        }
-        case SftpOperationResult.MetadataAlreadyExists e -> {
-            // Previous call already succeeded — this is a duplicate invocation
-            log.info("Order {} already submitted", order.id());
-        }
+    try {
+        var response = helper.startFileTransfer(request, metadata);
+        markSubmitted(order.id(), response.transferId());
+    } catch (MetadataWriteException e) {
+        // Transfer is running but won't produce enriched event.
+        // Log for manual reconciliation; don't retry.
+        var transferResponse = (StartFileTransferResponse) e.getSdkResponse();
+        log.warn("Transfer {} has no metadata correlation", transferResponse.transferId());
+        markSubmitted(order.id(), transferResponse.transferId());
     }
 }
 ```
 
 ### Graceful Degradation
 
-When DynamoDB is unavailable, `MetadataWriteFailed` fires. Decide whether to proceed without correlation or abort:
+When DynamoDB is unavailable, `MetadataWriteException` is thrown. Decide whether to proceed without correlation or abort:
 
 ```java
-var result = helper.startFileTransfer(request, metadata);
-
-if (result instanceof SftpOperationResult.MetadataWriteFailed<StartFileTransferResponse> f) {
+try {
+    var response = helper.startFileTransfer(request, metadata);
+    System.out.println("Transfer: " + response.transferId());
+} catch (MetadataWriteException e) {
     // Option A: Accept — transfer runs, no enriched event
-    log.warn("Proceeding without metadata for transfer {}", f.response().transferId());
-    trackManually(f.response().transferId(), metadata);
+    log.warn("Proceeding without metadata for transfer {}", e.getJobId());
+    trackManually(e.getJobId(), metadata);
 
     // Option B: Abort — if enriched events are critical to your workflow
-    // cancelOrCompensate(f.response().transferId());
+    // cancelOrCompensate(e.getJobId());
 }
 ```
 

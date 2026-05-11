@@ -56,12 +56,11 @@ try (SftpConnectorHelper helper = SftpConnectorHelper.builder().build()) {
         .sendFilePaths("/outbound/invoice-001.csv")
         .build();
 
-    SftpOperationResult<StartFileTransferResponse> result =
+    StartFileTransferResponse response =
         helper.startFileTransfer(request, "{\"orderId\":\"ORD-001\",\"customer\":\"ACME\"}");
 
-    if (result instanceof SftpOperationResult.Success<StartFileTransferResponse> s) {
-        System.out.println("Transfer started: " + s.response().transferId());
-    }
+    System.out.println("Transfer started: " + response.transferId());
+    // MetadataWriteException propagates if metadata write fails
 }
 ```
 

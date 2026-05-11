@@ -1,12 +1,10 @@
 package io.github.jcjorel.sftpconnectorhelper.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.github.jcjorel.sftpconnectorhelper.SftpOperationResult;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.transfer.model.StartDirectoryListingRequest;
-import software.amazon.awssdk.services.transfer.model.StartDirectoryListingResponse;
 
 import java.time.Duration;
 
@@ -30,11 +28,9 @@ class StartDirectoryListingIT extends IntegrationTestBase {
                 .outputDirectoryPath("/" + TEST_S3_BUCKET + "/listing-tests")
                 .build();
 
-        var result = helper.startDirectoryListing(request, metadata);
+        var response = helper.startDirectoryListing(request, metadata);
 
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        var success = (SftpOperationResult.Success<StartDirectoryListingResponse>) result;
-        String listingId = success.response().listingId();
+        String listingId = response.listingId();
         assertNotNull(listingId);
         assertFalse(listingId.isBlank());
         LOG.info("Directory listing started. listingId={}", listingId);

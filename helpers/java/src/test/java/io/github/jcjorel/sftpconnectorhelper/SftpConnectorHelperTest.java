@@ -48,16 +48,15 @@ class SftpConnectorHelperTest {
     }
 
     @Test
-    void startFileTransfer_successfulSdkCallAndDynamoWrite_returnsSuccess() {
+    void startFileTransfer_successfulSdkCallAndDynamoWrite_returnsResponse() {
         StartFileTransferResponse response = StartFileTransferResponse.builder()
                 .transferId(TRANSFER_ID)
                 .build();
         when(transferClient.startFileTransfer(sdkRequest)).thenReturn(response);
 
-        SftpOperationResult<StartFileTransferResponse> result = helper.startFileTransfer(sdkRequest, METADATA);
+        StartFileTransferResponse result = helper.startFileTransfer(sdkRequest, METADATA);
 
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        assertEquals(response, ((SftpOperationResult.Success<StartFileTransferResponse>) result).response());
+        assertSame(response, result);
     }
 
     @Test
@@ -73,7 +72,7 @@ class SftpConnectorHelperTest {
     }
 
     @Test
-    void startFileTransfer_dynamoConditionalCheckFails_returnsMetadataAlreadyExists() {
+    void startFileTransfer_dynamoConditionalCheckFails_throwsMetadataWriteException() {
         StartFileTransferResponse response = StartFileTransferResponse.builder()
                 .transferId(TRANSFER_ID)
                 .build();
@@ -81,16 +80,17 @@ class SftpConnectorHelperTest {
         when(dynamoDbClient.updateItem(any(UpdateItemRequest.class)))
                 .thenThrow(ConditionalCheckFailedException.builder().message("exists").build());
 
-        SftpOperationResult<StartFileTransferResponse> result = helper.startFileTransfer(sdkRequest, METADATA);
+        MetadataWriteException ex = assertThrows(MetadataWriteException.class,
+                () -> helper.startFileTransfer(sdkRequest, METADATA));
 
-        assertInstanceOf(SftpOperationResult.MetadataAlreadyExists.class, result);
-        var metadataExists = (SftpOperationResult.MetadataAlreadyExists<StartFileTransferResponse>) result;
-        assertEquals(response, metadataExists.response());
-        assertEquals(TRANSFER_ID, metadataExists.jobId());
+        assertEquals(TRANSFER_ID, ex.getJobId());
+        assertSame(response, ex.getSdkResponse());
+        assertTrue(ex.getMessage().contains("Unexpected duplicate metadata"));
+        assertInstanceOf(ConditionalCheckFailedException.class, ex.getCause());
     }
 
     @Test
-    void startFileTransfer_dynamoThrowsOtherException_returnsMetadataWriteFailed() {
+    void startFileTransfer_dynamoThrowsOtherException_throwsMetadataWriteException() {
         StartFileTransferResponse response = StartFileTransferResponse.builder()
                 .transferId(TRANSFER_ID)
                 .build();
@@ -99,13 +99,12 @@ class SftpConnectorHelperTest {
                 .message("throttled").build();
         when(dynamoDbClient.updateItem(any(UpdateItemRequest.class))).thenThrow(dynamoException);
 
-        SftpOperationResult<StartFileTransferResponse> result = helper.startFileTransfer(sdkRequest, METADATA);
+        MetadataWriteException ex = assertThrows(MetadataWriteException.class,
+                () -> helper.startFileTransfer(sdkRequest, METADATA));
 
-        assertInstanceOf(SftpOperationResult.MetadataWriteFailed.class, result);
-        var writeFailed = (SftpOperationResult.MetadataWriteFailed<StartFileTransferResponse>) result;
-        assertEquals(response, writeFailed.response());
-        assertEquals(TRANSFER_ID, writeFailed.jobId());
-        assertSame(dynamoException, writeFailed.cause());
+        assertEquals(TRANSFER_ID, ex.getJobId());
+        assertSame(response, ex.getSdkResponse());
+        assertSame(dynamoException, ex.getCause());
     }
 
     @Test
@@ -172,9 +171,9 @@ class SftpConnectorHelperTest {
         FileTransferOptions options = FileTransferOptions.builder()
                 .emissionMode(EventEmissionMode.INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION)
                 .build();
-        SftpOperationResult<StartFileTransferResponse> result = helper.startFileTransfer(multiFileRequest, METADATA, options);
+        StartFileTransferResponse result = helper.startFileTransfer(multiFileRequest, METADATA, options);
 
-        assertInstanceOf(SftpOperationResult.Success.class, result);
+        assertSame(response, result);
         ArgumentCaptor<UpdateItemRequest> captor = ArgumentCaptor.forClass(UpdateItemRequest.class);
         verify(dynamoDbClient).updateItem(captor.capture());
         UpdateItemRequest captured = captor.getValue();

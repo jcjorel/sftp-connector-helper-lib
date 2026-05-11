@@ -48,15 +48,14 @@ class SftpConnectorHelperRemoteDeleteTest {
     }
 
     @Test
-    void startRemoteDelete_success_returnsSuccess() {
+    void startRemoteDelete_success_returnsResponse() {
         StartRemoteDeleteResponse response = StartRemoteDeleteResponse.builder()
                 .deleteId(DELETE_ID).build();
         when(transferClient.startRemoteDelete(sdkRequest)).thenReturn(response);
 
-        SftpOperationResult<StartRemoteDeleteResponse> result = helper.startRemoteDelete(sdkRequest, METADATA);
+        StartRemoteDeleteResponse result = helper.startRemoteDelete(sdkRequest, METADATA);
 
-        assertInstanceOf(SftpOperationResult.Success.class, result);
-        assertEquals(response, ((SftpOperationResult.Success<StartRemoteDeleteResponse>) result).response());
+        assertSame(response, result);
     }
 
     @Test
@@ -72,36 +71,35 @@ class SftpConnectorHelperRemoteDeleteTest {
     }
 
     @Test
-    void startRemoteDelete_conditionalCheckFails_returnsMetadataAlreadyExists() {
+    void startRemoteDelete_conditionalCheckFails_throwsMetadataWriteException() {
         StartRemoteDeleteResponse response = StartRemoteDeleteResponse.builder()
                 .deleteId(DELETE_ID).build();
         when(transferClient.startRemoteDelete(sdkRequest)).thenReturn(response);
         when(dynamoDbClient.updateItem(any(UpdateItemRequest.class)))
                 .thenThrow(ConditionalCheckFailedException.builder().message("exists").build());
 
-        SftpOperationResult<StartRemoteDeleteResponse> result = helper.startRemoteDelete(sdkRequest, METADATA);
+        MetadataWriteException ex = assertThrows(MetadataWriteException.class,
+                () -> helper.startRemoteDelete(sdkRequest, METADATA));
 
-        assertInstanceOf(SftpOperationResult.MetadataAlreadyExists.class, result);
-        var r = (SftpOperationResult.MetadataAlreadyExists<StartRemoteDeleteResponse>) result;
-        assertEquals(response, r.response());
-        assertEquals(DELETE_ID, r.jobId());
+        assertEquals(DELETE_ID, ex.getJobId());
+        assertSame(response, ex.getSdkResponse());
+        assertTrue(ex.getMessage().contains("Unexpected duplicate metadata"));
     }
 
     @Test
-    void startRemoteDelete_dynamoThrows_returnsMetadataWriteFailed() {
+    void startRemoteDelete_dynamoThrows_throwsMetadataWriteException() {
         StartRemoteDeleteResponse response = StartRemoteDeleteResponse.builder()
                 .deleteId(DELETE_ID).build();
         when(transferClient.startRemoteDelete(sdkRequest)).thenReturn(response);
         DynamoDbException dynamoEx = (DynamoDbException) DynamoDbException.builder().message("err").build();
         when(dynamoDbClient.updateItem(any(UpdateItemRequest.class))).thenThrow(dynamoEx);
 
-        SftpOperationResult<StartRemoteDeleteResponse> result = helper.startRemoteDelete(sdkRequest, METADATA);
+        MetadataWriteException ex = assertThrows(MetadataWriteException.class,
+                () -> helper.startRemoteDelete(sdkRequest, METADATA));
 
-        assertInstanceOf(SftpOperationResult.MetadataWriteFailed.class, result);
-        var r = (SftpOperationResult.MetadataWriteFailed<StartRemoteDeleteResponse>) result;
-        assertEquals(response, r.response());
-        assertEquals(DELETE_ID, r.jobId());
-        assertSame(dynamoEx, r.cause());
+        assertEquals(DELETE_ID, ex.getJobId());
+        assertSame(response, ex.getSdkResponse());
+        assertSame(dynamoEx, ex.getCause());
     }
 
     @Test
