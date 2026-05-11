@@ -43,7 +43,7 @@ The `helpers/java/pom.xml` includes all required plugins:
 
 ## Publish Procedure
 
-1. **CHANGELOG verification (MUST — hard stop if missing):** Read `CHANGELOG.md` and confirm it contains an entry for the version being released (e.g., `## [X.Y.Z]` or `## X.Y.Z`). If no matching entry exists, ABORT the entire procedure immediately with a clear error message and DO NOT proceed to any subsequent step.
+1. **CHANGELOG verification and date stamp (MUST — hard stop if missing):** Read `CHANGELOG.md` and confirm it contains an entry for the version being released (e.g., `## [X.Y.Z]` or `## X.Y.Z`). If no matching entry exists, ABORT the entire procedure immediately with a clear error message and DO NOT proceed to any subsequent step. If the entry does NOT already have a date suffix, update the heading to `## [X.Y.Z] - YYYY-MM-DD` using today's date (ISO 8601 format).
 2. Verify the working tree is clean: `git status` MUST show no uncommitted changes.
 3. Update version in all three POMs (root, helpers/java, tests/integration/java).
 4. Run full build with tests from `helpers/java/`:
@@ -51,7 +51,7 @@ The `helpers/java/pom.xml` includes all required plugins:
    cd helpers/java && mvn clean verify
    ```
 5. Verify build succeeds and all tests pass.
-6. Commit the version bump with message: `chore: bump version to X.Y.Z`
+6. Commit the version bump and CHANGELOG date update with message: `chore: release version X.Y.Z`
 7. Tag the release: `git tag vX.Y.Z`
 8. Deploy to Maven Central from `helpers/java/`:
    ```bash
