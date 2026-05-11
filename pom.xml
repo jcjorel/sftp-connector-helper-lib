@@ -24,9 +24,9 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Dependency versions -->
         <aws.sdk.version>2.44.4</aws.sdk.version>
-        <junit.version>5.12.2</junit.version>
-        <mockito.version>5.18.0</mockito.version>
-        <jackson.version>2.18.4</jackson.version>
+        <junit.version>5.14.4</junit.version>
+        <mockito.version>5.23.0</mockito.version>
+        <jackson.version>2.21.3</jackson.version>
         <slf4j.version>2.0.17</slf4j.version>
         <awaitility.version>4.3.0</awaitility.version>
         <!-- Plugin versions -->
@@ -37,7 +37,7 @@
         <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
         <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
         <central-publishing-maven-plugin.version>0.10.0</central-publishing-maven-plugin.version>
-        <flatten-maven-plugin.version>1.7.0</flatten-maven-plugin.version>
+        <flatten-maven-plugin.version>1.7.3</flatten-maven-plugin.version>
     </properties>
 
     <dependencyManagement>
