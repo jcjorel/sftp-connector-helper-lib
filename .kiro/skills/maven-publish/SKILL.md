@@ -43,21 +43,22 @@ The `helpers/java/pom.xml` includes all required plugins:
 
 ## Publish Procedure
 
-1. Verify the working tree is clean: `git status` MUST show no uncommitted changes.
-2. Update version in all three POMs (root, helpers/java, tests/integration/java).
-3. Run full build with tests from `helpers/java/`:
+1. **CHANGELOG verification (MUST — hard stop if missing):** Read `CHANGELOG.md` and confirm it contains an entry for the version being released (e.g., `## [X.Y.Z]` or `## X.Y.Z`). If no matching entry exists, ABORT the entire procedure immediately with a clear error message and DO NOT proceed to any subsequent step.
+2. Verify the working tree is clean: `git status` MUST show no uncommitted changes.
+3. Update version in all three POMs (root, helpers/java, tests/integration/java).
+4. Run full build with tests from `helpers/java/`:
    ```bash
    cd helpers/java && mvn clean verify
    ```
-4. Verify build succeeds and all tests pass.
-5. Commit the version bump with message: `chore: bump version to X.Y.Z`
-6. Tag the release: `git tag vX.Y.Z`
-7. Deploy to Maven Central from `helpers/java/`:
+5. Verify build succeeds and all tests pass.
+6. Commit the version bump with message: `chore: bump version to X.Y.Z`
+7. Tag the release: `git tag vX.Y.Z`
+8. Deploy to Maven Central from `helpers/java/`:
    ```bash
    cd helpers/java && mvn clean deploy
    ```
-8. Verify publication at https://central.sonatype.com/artifact/io.github.jcjorel/sftp-connector-helper
-9. Push commit and tag: `git push && git push --tags`
+9. Verify publication at https://central.sonatype.com/artifact/io.github.jcjorel/sftp-connector-helper
+10. Push commit and tag: `git push && git push --tags`
 
 ## Prerequisites (user's local environment)
 
@@ -83,6 +84,7 @@ The `helpers/java/pom.xml` includes all required plugins:
 
 ## Constraints
 
+- MUST NOT publish without a matching version entry in `CHANGELOG.md`. This is a hard gate — abort immediately if missing.
 - MUST NOT publish from a dirty working tree.
 - MUST NOT skip GPG signing (Maven Central rejects unsigned artifacts).
 - MUST NOT use `-DskipTests` during the publish build.
