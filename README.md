@@ -31,7 +31,7 @@ This library solves all of that with a single CDK construct and a thin Java wrap
 ### Prerequisites
 
 - Node.js 18+ and AWS CDK v2 (`npm install -g aws-cdk`)
-- Python 3.12+ with `uv` package manager
+- Python 3.12+ with `pip`
 - Java 21+ with Maven
 - AWS CLI v2 configured with a named profile
 - IAM permissions for your application (see [User Guide — IAM Permissions](docs/USER_GUIDE.md#iam-permissions-required-by-caller))

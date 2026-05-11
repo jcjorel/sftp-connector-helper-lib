@@ -8,7 +8,6 @@ AWS_REGION ?=
 .PHONY: check-tools check-deploy-env
 
 check-tools:
-	@command -v uv >/dev/null 2>&1 || { echo "ERROR: 'uv' not found. Install: https://docs.astral.sh/uv/getting-started/installation/"; exit 1; }
 	@command -v pip >/dev/null 2>&1 || { echo "ERROR: 'pip' not found."; exit 1; }
 	@command -v cdk >/dev/null 2>&1 || { echo "ERROR: 'cdk' not found. Install: npm install -g aws-cdk"; exit 1; }
 	@command -v mvn >/dev/null 2>&1 || { echo "ERROR: 'mvn' not found. Install Maven 3.x+"; exit 1; }
@@ -31,7 +30,6 @@ build-lambdas: check-tools
 		[ "$${dir}" = "lambdas/shared/" ] && continue; \
 		cd $$dir && \
 		rm -rf dist/ && \
-		uv export --format requirements-txt --no-dev --no-emit-project -o requirements.txt && \
 		pip install --target dist/ -r requirements.txt -q && \
 		cp *.py dist/ && \
 		cp ../shared/*.py dist/ && \
