@@ -1,6 +1,6 @@
 # Changelog
 
-## [2.0.0] - 2026-05-11
+## [2.0.0]
 
 ### Breaking Changes
 
@@ -11,6 +11,19 @@
 
 - `SftpConnectorHelperException` — abstract base class for all library-specific exceptions (extends `RuntimeException`).
 - `MetadataWriteException` — thrown when DynamoDB metadata write fails after a successful SDK call. Carries `getJobId()`, `getSdkResponse()`, and `getCause()`.
+
+### Changed
+
+- **Integration test infrastructure** — initialize test resources once per JVM for faster test execution
+
+### Documentation
+
+- Added Maven Central publish skill
+
+### Chores
+
+- Add CHANGELOG gate to publish procedure
+- Ignore Maven flatten plugin artifacts
 
 ### Migration Guide
 
