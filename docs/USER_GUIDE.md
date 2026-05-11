@@ -39,6 +39,7 @@ For multi-file transfers, you can receive a single "all done" event instead of (
 ```java
 FileTransferOptions options = FileTransferOptions.builder()
     .emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY)
+    .batchTimeout(Duration.ofMinutes(30))  // optional: default is 1 hour
     .build();
 
 SftpOperationResult<StartFileTransferResponse> result =
@@ -60,6 +61,18 @@ The `startFileTransfer` method accepts an optional third parameter:
 | `INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION` | Both per-file events and a batch completion event. |
 
 Passing `null` for `options` (or using the 2-arg overload) is equivalent to `INDIVIDUAL_FILE_EVENTS_ONLY`.
+
+**`batchTimeout(Duration)`** controls when a timeout event fires if not all files resolve:
+
+| Value | Behavior |
+|-------|----------|
+| Not set (default) | 1 hour when any batch emission mode is active |
+| `Duration.ofMinutes(30)` | Custom timeout (must be ≥ 2 seconds) |
+| `Duration.ZERO` | Disabled — no timeout event will be published |
+
+The timeout is ignored when `emissionMode` is `INDIVIDUAL_FILE_EVENTS_ONLY` (no batch tracking).
+
+> **Constraint**: `batchTimeout` must be less than `ttlDuration + 1 hour` (the effective record TTL). Otherwise the DynamoDB record may expire before the timeout fires, and an `IllegalArgumentException` is thrown at call time.
 
 ### Result Types
 
@@ -199,6 +212,8 @@ When using `WHOLE_TRANSFER_COMPLETION_ONLY` or `INDIVIDUAL_AND_WHOLE_TRANSFER_CO
 **Detail-types** for batch events:
 - `SFTP Connector Whole File Send Transfer Completed - CUSTOM`
 - `SFTP Connector Whole File Retrieve Transfer Completed - CUSTOM`
+- `SFTP Connector Whole File Send Transfer Timed Out - CUSTOM`
+- `SFTP Connector Whole File Retrieve Transfer Timed Out - CUSTOM`
 
 **`status-code`** values (batch events):
 | Value | Meaning |
@@ -206,6 +221,50 @@ When using `WHOLE_TRANSFER_COMPLETION_ONLY` or `INDIVIDUAL_AND_WHOLE_TRANSFER_CO
 | `ALL_COMPLETED` | Every file has `status-code: "COMPLETED"` |
 | `ALL_FAILED` | Every file has status `FAILED` |
 | `PARTIAL_FAILURE` | Mix of completed and failed files |
+| `TIMED_OUT` | Batch timeout fired before all files resolved |
+
+### Batch Timeout Event Format
+
+When the configured batch timeout expires before all files complete, a timeout event is published:
+
+```json
+{
+  "source": "custom.sftp-connector-helper",
+  "detail-type": "SFTP Connector Whole File Send Transfer Timed Out - CUSTOM",
+  "detail": {
+    "transfer-id": "xfer-abc123",
+    "connector-id": "c-1234567890abcdef0",
+    "status-code": "TIMED_OUT",
+    "file-count": 5,
+    "completed-count": 3,
+    "failed-count": 0,
+    "timed-out-count": 2,
+    "_helper_metadata": {
+      "orderId": "ORD-001",
+      "customer": "ACME"
+    },
+    "files": [
+      {
+        "connector-id": "c-1234567890abcdef0",
+        "transfer-id": "xfer-abc123",
+        "status-code": "COMPLETED",
+        "file-path": "/outbound/invoice-001.csv",
+        "_helper_metadata": { "orderId": "ORD-001", "customer": "ACME" }
+      },
+      {
+        "file-transfer-id": "unknown",
+        "status-code": "TIMED_OUT",
+        "file-path": "/outbound/invoice-004.csv",
+        "_helper_metadata": { "orderId": "ORD-001", "customer": "ACME" }
+      }
+    ]
+  }
+}
+```
+
+Files that resolved before the timeout have their full Transfer Family event detail. Files that did not resolve have `status-code: "TIMED_OUT"` and `file-transfer-id: "unknown"`.
+
+> **Note**: A timeout event and a normal completion event are mutually exclusive for the same transfer. If all files complete before the timeout, only the completion event is published. If the timeout fires first, only the timeout event is published (even if remaining files complete later).
 
 ### EventBridge Rule (CDK)
 

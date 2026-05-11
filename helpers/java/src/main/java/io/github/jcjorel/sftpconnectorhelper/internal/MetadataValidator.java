@@ -8,7 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Validates metadata before SDK calls.
+ * Validates metadata JSON strings against size and format constraints.
  * Internal class — not part of the public API.
  */
 public final class MetadataValidator {
@@ -34,7 +34,8 @@ public final class MetadataValidator {
      *
      * @param metadata the metadata JSON string to validate
      * @throws IllegalArgumentException if metadata is null, not a JSON object,
-     *         exceeds 8,000 bytes UTF-8 encoded, or exceeds 50 levels of nesting depth
+     *         exceeds {@value #MAX_METADATA_BYTES} bytes UTF-8 encoded, or exceeds
+     *         {@value #MAX_NESTING_DEPTH} levels of nesting depth
      */
     public static void validate(String metadata) {
         if (metadata == null || metadata.isEmpty()) {

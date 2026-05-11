@@ -444,6 +444,7 @@ String metadata = """
 
 FileTransferOptions options = FileTransferOptions.builder()
     .emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY)
+    .batchTimeout(Duration.ofMinutes(30))  // timeout if not all files complete within 30 min
     .build();
 
 var result = helper.startFileTransfer(request, metadata, options);
@@ -479,9 +480,40 @@ Your consumer receives a single batch completion event:
 ```
 
 **What just happened**:
-1. The helper recorded your metadata along with the batch-tracking configuration (emission mode, expected file count, transfer direction).
+1. The helper recorded your metadata along with the batch-tracking configuration (emission mode, expected file count, transfer direction, and timeout deadline).
 2. As each file completed, the framework tracked its status — but did **not** publish individual enriched events (suppressed by `WHOLE_TRANSFER_COMPLETION_ONLY`).
 3. When the last file completed, the framework published the batch completion event with all file statuses aggregated.
+4. If not all files complete within 30 minutes, the framework publishes a **timeout event** instead (see below).
+
+**Batch timeout** defaults to 1 hour when any batch emission mode is active. Set `Duration.ZERO` to disable it. See [User Guide — Batch Completion Events](USER_GUIDE.md#batch-completion-events-filetransferoptions) for the full API reference.
+
+### Handling Timeout Events
+
+If some files don't complete before the timeout, your consumer receives a timeout event instead of (or in addition to) the completion event:
+
+```python
+def lambda_handler(event, context):
+    detail = event["detail"]
+    detail_type = event["detail-type"]
+    status = detail["status-code"]
+
+    if status == "TIMED_OUT":
+        # Not all files completed within the configured timeout
+        timed_out = detail["timed-out-count"]
+        completed = detail["completed-count"]
+        total = detail["file-count"]
+        print(f"⏱ Batch timed out: {completed}/{total} completed, {timed_out} timed out")
+
+        # Inspect per-file statuses
+        for f in detail["files"]:
+            if f["status-code"] == "TIMED_OUT":
+                print(f"  ✗ {f['file-path']} — did not complete")
+    else:
+        # Normal completion: ALL_COMPLETED, ALL_FAILED, or PARTIAL_FAILURE
+        print(f"✓ Batch {status}: {detail['completed-count']}/{detail['file-count']} completed")
+```
+
+The timeout event has `detail-type` ending in `"Timed Out - CUSTOM"` (e.g., `"SFTP Connector Whole File Send Transfer Timed Out - CUSTOM"`). Files that didn't resolve have per-file `status-code: "TIMED_OUT"`.
 
 See [Architecture — Whole Transfer Completion](ARCHITECTURE.md#whole-transfer-completion-batch-tracking) for how the internal batch tracking mechanism works.
 

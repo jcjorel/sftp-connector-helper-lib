@@ -184,9 +184,9 @@ public final class SftpConnectorHelper implements AutoCloseable {
             long effectiveTtlSeconds = ttlDuration.toSeconds() + 3600;
             if (batchTimeout.toSeconds() >= effectiveTtlSeconds) {
                 throw new IllegalArgumentException(
-                        "batchTimeout (" + batchTimeout + ") must be less than effective TTL ("
-                        + Duration.ofSeconds(effectiveTtlSeconds) + " = ttlDuration + 1h master stagger). "
-                        + "Otherwise the DynamoDB record may expire before the timeout fires.");
+                        "batchTimeout (" + batchTimeout + ") must be less than the metadata record lifetime ("
+                        + Duration.ofSeconds(effectiveTtlSeconds) + "). "
+                        + "Reduce batchTimeout or increase ttlDuration.");
             }
         }
 
@@ -348,7 +348,7 @@ public final class SftpConnectorHelper implements AutoCloseable {
     }
 
     /**
-     * Validates metadata before SDK calls.
+     * Validates the metadata JSON string against size and format constraints.
      *
      * @param metadata the metadata JSON string to validate
      * @throws IllegalArgumentException if metadata is invalid

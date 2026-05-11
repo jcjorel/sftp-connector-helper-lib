@@ -31,7 +31,16 @@ The SFTP Connector Helper framework correlates business metadata with AWS Transf
 │  - Completeness check            │        │  Bus (enriched events)  │
 │  - Fan-out metadata copy         │        └─────────────────────────┘
 │  - Orphan detection (TTL expiry) │
-│  - Publish enriched event        │──────▶ SNS (orphan alerts)
+│  - Batch tracking + timeout      │──────▶ SNS (orphan alerts)
+│  - Publish enriched event        │
+└──────────┬───────────────────────┘
+           │                    ▲
+           │ Schedule timeout   │ SQS Event Source (batch_size=1)
+           ▼                    │
+┌──────────────────────────────────┐
+│  Timeout Queue (SQS)             │
+│  sftp-connector-helper-timeout   │
+│  (delay-hopping: max 900s/hop)   │
 └──────────────────────────────────┘
 ```
 
@@ -172,8 +181,9 @@ All metrics are emitted to namespace `SftpConnectorHelper`:
 |-------|--------|---------|
 | **EventWriterDLQ** | EventBridge → Lambda target | Event Writer Lambda invocation fails after 2 retries |
 | **PipeDLQ** (`sftp-connector-helper-pipe-dlq`) | DynamoDB Streams → EventBridge Pipe | Joiner Lambda invocation fails after 3 retries or 1-hour record age (whichever comes first) |
+| **TimeoutDLQ** (`sftp-connector-helper-timeout-dlq`) | Timeout SQS queue | Timeout message processing fails after 3 receive attempts |
 
-Both queues use default SQS retention (4 days). Messages contain the original event payload for replay or inspection.
+EventWriterDLQ and PipeDLQ use default SQS retention (4 days). TimeoutDLQ and TimeoutQueue use 24-hour retention. Messages contain the original event payload for replay or inspection.
 
 ## Whole Transfer Completion (Batch Tracking)
 
@@ -201,6 +211,19 @@ When `emissionMode` ≠ `INDIVIDUAL_FILE_EVENTS_ONLY`, the Java helper writes th
 | `resolvedCount` | Number | Atomic counter of resolved files (incremented via `ADD`) |
 | `batchEventPublished` | Boolean | Deduplication marker — prevents duplicate batch events |
 
+### Additional DynamoDB Attributes (Batch Timeout)
+
+When `batchTimeout` is non-zero (default: 1 hour for batch modes), the Java helper writes these additional attributes on the master record:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `batchTimeoutAt` | Number | Unix epoch timestamp when the timeout should fire |
+| `filePaths` | List | Original file paths (used to identify timed-out files in the timeout event) |
+| `batchTimeoutScheduled` | Boolean | Deduplication marker — prevents duplicate SQS scheduling |
+| `batchTimeoutPublished` | Boolean | Deduplication marker — prevents duplicate timeout events |
+
+**Mutual exclusion**: The batch completion guard and timeout guard are mutually exclusive via condition expression `attribute_not_exists(batchEventPublished) AND attribute_not_exists(batchTimeoutPublished)`. Whichever fires first (normal completion or timeout) wins; the other is suppressed.
+
 ### Batch Tracking Data Flow
 
 1. **Java helper** writes master record with `emissionMode`, `expectedFiles`, `transferDirection`, and an initialized `fileStatuses` map.
@@ -218,6 +241,8 @@ These are custom events produced by the Joiner (not Transfer Family events):
 |-------------|---------|
 | `SFTP Connector Whole File Send Transfer Completed - CUSTOM` | All files in a send transfer resolved |
 | `SFTP Connector Whole File Retrieve Transfer Completed - CUSTOM` | All files in a retrieve transfer resolved |
+| `SFTP Connector Whole File Send Transfer Timed Out - CUSTOM` | Batch timeout fired before all send files resolved |
+| `SFTP Connector Whole File Retrieve Transfer Timed Out - CUSTOM` | Batch timeout fired before all retrieve files resolved |
 
 The event `source` is `"custom.sftp-connector-helper"` (same as individual enriched events).
 
@@ -239,13 +264,31 @@ The event `source` is `"custom.sftp-connector-helper"` (same as individual enric
 }
 ```
 
-**`status-code` values** (batch events): `ALL_COMPLETED` | `ALL_FAILED` | `PARTIAL_FAILURE`
+**`status-code` values** (batch events): `ALL_COMPLETED` | `ALL_FAILED` | `PARTIAL_FAILURE` | `TIMED_OUT`
 
 ### Idempotency
 
 - Per-file tracking uses `attribute_not_exists(#fs.#ftId)` condition — duplicate file events are safely ignored.
 - On duplicate, the Joiner re-reads the master record and re-evaluates the batch guard (handles race conditions).
 - `batchEventPublished` marker prevents duplicate batch events (best-effort — at-least-once delivery is possible in edge cases).
+
+### Batch Timeout Path
+
+When `batchTimeout` is configured (default: 1 hour for batch modes), the framework schedules a timeout check that fires if not all files resolve in time:
+
+1. **Joiner Lambda** (on master record INSERT via DynamoDB Stream) detects `batchTimeoutAt` attribute → sends a delayed SQS message to the Timeout Queue. Sets `batchTimeoutScheduled = true` as a dedup marker.
+2. **SQS delay-hopping**: SQS maximum delay is 900 seconds. If the target timeout is further away, the message re-enqueues itself with `DelaySeconds = min(remaining, 900)` until the target time is reached.
+3. **Timeout fires**: When the message is consumed at or after the target time, the Joiner (via SQS event source) checks DynamoDB:
+   - If `batchEventPublished` or `batchTimeoutPublished` is set → already handled, skip.
+   - If `resolvedCount >= expectedFiles` → all files completed (race with normal path), skip.
+   - Otherwise → publish timeout event, then set `batchTimeoutPublished = true`.
+4. **Degraded mode**: If the DynamoDB record has already TTL'd when the timeout fires, the Joiner publishes a degraded timeout event assembled from the SQS message body (which carries all necessary fields).
+
+The Joiner Lambda is invoked from two sources:
+- **EventBridge Pipe** (DynamoDB Streams): delivers a list of stream records
+- **SQS Event Source Mapping** (Timeout Queue, `batch_size=1`): delivers `{"Records": [...]}`
+
+The handler dispatches based on event shape (`list` → Pipe path, `dict` with `"Records"` → SQS timeout path).
 
 ## Limitations
 

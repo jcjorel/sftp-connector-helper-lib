@@ -11,7 +11,7 @@ import java.time.Duration;
  * <p>All parameters are optional. When omitted, sensible defaults are used:
  * <ul>
  *   <li>{@code tableName} — defaults to {@code "sftp-connector-helper"}</li>
- *   <li>{@code ttlDuration} — defaults to 24 hours</li>
+ *   <li>{@code ttlDuration} — defaults to {@link SftpConnectorHelper#DEFAULT_TTL_DURATION}</li>
  *   <li>{@code dynamoDbClient} — creates a default client using the standard credential chain</li>
  *   <li>{@code transferClient} — creates a default client using the standard credential chain</li>
  * </ul>

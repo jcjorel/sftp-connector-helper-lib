@@ -22,6 +22,7 @@ This library solves all of that with a single CDK construct and a thin Java wrap
 - **Enriched events** — Consume events on a dedicated EventBridge bus with your metadata already joined (captures both file send and file retrieve events)
 - **Idempotent by design** — Safe-to-retry metadata correlation
 - **Orphan detection** — Automatic alerting via SNS when Transfer Family events arrive without matching metadata
+- **Batch timeout** — Automatic timeout event when multi-file transfers don't complete within a configurable duration (default: 1 hour)
 - **Turnkey deployment** — Single CDK construct deploys the entire pipeline
 - **Directory listing filter** — Client-side utility for regex-based filtering of listing results from S3 output referenced in enriched events
 

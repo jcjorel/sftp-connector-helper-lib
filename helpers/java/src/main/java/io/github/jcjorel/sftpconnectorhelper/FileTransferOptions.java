@@ -23,9 +23,8 @@ public final class FileTransferOptions {
      *
      * <p><b>Warning:</b> Values below 15 minutes are impractical for production use.
      * SFTP Connector transfers typically take several seconds per file, and the timeout
-     * mechanism relies on SQS delayed messages with 1-second granularity. This low minimum
-     * exists solely to enable integration testing of the timeout code path within a
-     * reasonable test duration.</p>
+     * mechanism has limited time granularity. This low minimum exists to support
+     * testing scenarios with short-lived transfers.</p>
      */
     public static final Duration MIN_BATCH_TIMEOUT = Duration.ofSeconds(2);
 
