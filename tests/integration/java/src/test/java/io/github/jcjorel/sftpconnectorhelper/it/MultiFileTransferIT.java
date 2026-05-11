@@ -388,17 +388,26 @@ class MultiFileTransferIT extends IntegrationTestBase {
 
         assertMetadataInDynamoDb(transferId, metadata);
 
-        // Wait for all 10 individual per-file events
-        List<JsonNode> individualEvents = pollForEnrichedEventsByDetailType(
-                INDIVIDUAL_SEND_DETAIL_TYPE, "transfer-id", transferId, FILE_COUNT, POLL_TIMEOUT);
+        // Wait for all N+1 events (10 individual + 1 batch) in a single pass to avoid
+        // discarding the batch event while polling for individual events (they share one SQS queue)
+        List<JsonNode> allEvents = pollForAllEnrichedEvents("transfer-id", transferId, FILE_COUNT + 1, POLL_TIMEOUT);
+        assertEquals(FILE_COUNT + 1, allEvents.size(), "Expected " + (FILE_COUNT + 1) + " total events");
+
+        // Partition by presence of "file-count" field (batch event has it, individual events don't)
+        List<JsonNode> individualEvents = new ArrayList<>();
+        List<JsonNode> batchEvents = new ArrayList<>();
+        for (JsonNode event : allEvents) {
+            if (event.has("file-count")) {
+                batchEvents.add(event);
+            } else {
+                individualEvents.add(event);
+            }
+        }
+
         assertEquals(FILE_COUNT, individualEvents.size(), "Expected " + FILE_COUNT + " individual events");
         LOG.info("Received all {} individual per-file events", FILE_COUNT);
 
-        // Wait for the batch completion event
-        List<JsonNode> batchEvents = pollForEnrichedEventsByDetailType(
-                SEND_BATCH_DETAIL_TYPE, "transfer-id", transferId, 1, Duration.ofSeconds(60));
         assertEquals(1, batchEvents.size(), "Expected exactly 1 batch completion event");
-
         JsonNode batch = batchEvents.get(0);
         assertEquals("ALL_COMPLETED", batch.get("status-code").asText());
         assertEquals(FILE_COUNT, batch.get("file-count").asInt());
