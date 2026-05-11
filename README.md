@@ -33,7 +33,7 @@ This library solves all of that with a single CDK construct and a thin Java wrap
 - Python 3.12+ with `uv` package manager
 - Java 21+ with Maven
 - AWS CLI v2 configured with a named profile
-- IAM permissions for your application: `transfer:Start*` on your connector + `dynamodb:UpdateItem` on the helper table (see [User Guide — IAM Permissions](docs/USER_GUIDE.md#iam-permissions-required-by-caller))
+- IAM permissions for your application (see [User Guide — IAM Permissions](docs/USER_GUIDE.md#iam-permissions-required-by-caller))
 
 ### Deploy
 
@@ -92,7 +92,7 @@ The helper adds a single metadata write per operation (~5–10 ms typical). End-
 
 - **Overhead is noise-dominated** — negative overhead values in several runs confirm that SFTP Connector variance far exceeds the helper's added latency.
 - **Directory listing and multi-file sends show near-zero mean overhead** (−9 ms and −38 ms respectively), meaning the metadata write is fully amortized.
-- **Single-file operations** add ~835–1079 ms mean overhead, largely due to the enriched event pipeline (DynamoDB stream → Lambda joiner → EventBridge) rather than the metadata write itself.
+- **Single-file operations** add ~835–1079 ms mean overhead, largely due to the enriched event pipeline rather than the metadata write itself.
 - **Batch-completion mode** (`WholeOnly`, `Ind+Whole`) adds minimal cost over per-file mode while providing a single "all done" signal for fan-out workflows.
 
 Run the benchmark: `make test-integration AWS_PROFILE=<profile> AWS_REGION=<region>`

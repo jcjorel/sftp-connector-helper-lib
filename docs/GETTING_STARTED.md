@@ -18,7 +18,7 @@ Add the Maven dependency:
 <dependency>
     <groupId>io.github.jcjorel</groupId>
     <artifactId>sftp-connector-helper</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.0-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -183,11 +183,10 @@ Batch transfer started: t-xyz7890abcdef123
 
 **What just happened**:
 1. Transfer Family starts 5 parallel file transfers under one `transferId`.
-2. The helper writes a **master record** (keyed by `transferId`) with your metadata.
-3. As each file completes, Transfer Family emits a per-file event with a unique `file-transfer-id`.
-4. The Joiner copies metadata from the master record to each per-file record and publishes 5 enriched events.
+2. The helper writes your metadata once for the entire batch.
+3. As each file completes, the framework joins your metadata with each per-file event and publishes 5 enriched events — one per file.
 
-See [Architecture — Fan-Out Path](ARCHITECTURE.md#fan-out-path-multi-file-transfer) for the internal metadata copy mechanism.
+See [Architecture — Fan-Out Path](ARCHITECTURE.md#fan-out-path-multi-file-transfer) for how the internal fan-out mechanism works.
 
 Your consumer receives 5 events, each with:
 - `transfer-id` — the shared batch ID
@@ -356,6 +355,11 @@ if (result instanceof SftpOperationResult.Success<StartRemoteDeleteResponse> s) 
 }
 ```
 
+**Expected output**:
+```
+Delete started: d-456abc789def012
+```
+
 **What just happened**: Same pattern as move — the enriched event arrives with `detail-type: "SFTP Connector Remote Delete Completed"` and your metadata.
 
 ---
@@ -475,13 +479,157 @@ Your consumer receives a single batch completion event:
 ```
 
 **What just happened**:
-1. The helper wrote batch-tracking fields (`emissionMode`, `expectedFiles`, `transferDirection`) to the master DynamoDB record.
-2. As each file completed, the Joiner tracked it in the master record's `fileStatuses` map — but did **not** publish individual enriched events (suppressed by `WHOLE_TRANSFER_COMPLETION_ONLY`).
-3. When the last file resolved, the Joiner detected `resolvedCount == expectedFiles` and published the batch completion event with all file statuses aggregated.
+1. The helper recorded your metadata along with the batch-tracking configuration (emission mode, expected file count, transfer direction).
+2. As each file completed, the framework tracked its status — but did **not** publish individual enriched events (suppressed by `WHOLE_TRANSFER_COMPLETION_ONLY`).
+3. When the last file completed, the framework published the batch completion event with all file statuses aggregated.
 
-See [Architecture — Whole Transfer Completion](ARCHITECTURE.md#whole-transfer-completion-batch-tracking) for the internal batch tracking mechanism.
+See [Architecture — Whole Transfer Completion](ARCHITECTURE.md#whole-transfer-completion-batch-tracking) for how the internal batch tracking mechanism works.
 
 **Other modes**: Use `INDIVIDUAL_AND_WHOLE_TRANSFER_COMPLETION` to receive both per-file events *and* the batch event. See [User Guide — Batch Completion Events](USER_GUIDE.md#batch-completion-events-filetransferoptions) for the full API reference.
+
+---
+
+## Scenario 11: Reactive SQS Long-Polling Consumer (Java)
+
+**Goal**: Efficiently consume enriched events from an SQS queue attached to the dedicated EventBridge bus using the AWS SDK v2 async client — no threads blocked while waiting for messages.
+
+### Step 1 — Attach an SQS queue to the EventBridge bus
+
+Create a rule that routes enriched events to an SQS queue (CDK example):
+
+```python
+from aws_cdk import aws_sqs as sqs, aws_events as events, aws_events_targets as targets
+
+queue = sqs.Queue(self, "EnrichedEventsQueue",
+    visibility_timeout=Duration.seconds(30),
+)
+
+events.Rule(self, "AllEnrichedEventsToSqs",
+    event_bus=helper_construct.event_bus,
+    event_pattern=events.EventPattern(
+        source=["custom.sftp-connector-helper"],
+    ),
+    targets=[targets.SqsQueue(queue)],
+)
+```
+
+### Step 2 — Reactive long-polling consumer
+
+Add the SQS async dependency to your `pom.xml`:
+
+```xml
+<dependency>
+    <groupId>software.amazon.awssdk</groupId>
+    <artifactId>sqs</artifactId>
+</dependency>
+<dependency>
+    <groupId>com.fasterxml.jackson.core</groupId>
+    <artifactId>jackson-databind</artifactId>
+    <version>2.18.2</version>
+</dependency>
+```
+
+The consumer uses `receiveMessage` with `waitTimeSeconds(20)` for long polling and chains async calls reactively — no thread is blocked while waiting:
+
+```java
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import software.amazon.awssdk.services.sqs.SqsAsyncClient;
+import software.amazon.awssdk.services.sqs.model.*;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+public class EnrichedEventConsumer implements AutoCloseable {
+
+    private final SqsAsyncClient sqs = SqsAsyncClient.create();
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final String queueUrl;
+    private final AtomicBoolean running = new AtomicBoolean(true);
+
+    public EnrichedEventConsumer(String queueUrl) {
+        this.queueUrl = queueUrl;
+    }
+
+    public void start() {
+        pollLoop();
+    }
+
+    private void pollLoop() {
+        if (!running.get()) return;
+
+        sqs.receiveMessage(ReceiveMessageRequest.builder()
+                .queueUrl(queueUrl)
+                .waitTimeSeconds(20)          // long poll — no cost while idle
+                .maxNumberOfMessages(10)
+                .build())
+            .thenAccept(response -> {
+                for (Message msg : response.messages()) {
+                    processMessage(msg);
+                }
+            })
+            .whenComplete((ignored, error) -> {
+                if (error != null) {
+                    System.err.println("Poll error: " + error.getMessage());
+                }
+                pollLoop(); // schedule next poll — fully non-blocking
+            });
+    }
+
+    private void processMessage(Message msg) {
+        try {
+            JsonNode event = mapper.readTree(msg.body());
+            String detailType = event.path("detail-type").asText();
+            JsonNode detail = event.path("detail");
+            String status = detail.path("status-code").asText();
+            JsonNode metadata = detail.path("_helper_metadata");
+
+            System.out.printf("[%s] status=%s orderId=%s customer=%s%n",
+                detailType, status,
+                metadata.path("orderId").asText("N/A"),
+                metadata.path("customer").asText("N/A"));
+
+            // Delete after successful processing
+            sqs.deleteMessage(DeleteMessageRequest.builder()
+                .queueUrl(queueUrl)
+                .receiptHandle(msg.receiptHandle())
+                .build());
+
+        } catch (Exception e) {
+            System.err.println("Failed to process message: " + e.getMessage());
+            // Message returns to queue after visibility timeout
+        }
+    }
+
+    @Override
+    public void close() {
+        running.set(false);
+        sqs.close();
+    }
+
+    public static void main(String[] args) {
+        var consumer = new EnrichedEventConsumer(
+            "https://sqs.<region>.amazonaws.com/<account>/EnrichedEventsQueue");
+        consumer.start();
+
+        // Keep running until interrupted
+        Runtime.getRuntime().addShutdownHook(new Thread(consumer::close));
+    }
+}
+```
+
+**Expected output** (when a transfer completes):
+```
+[SFTP Connector File Send Completed] status=COMPLETED orderId=ORD-42 customer=ACME
+```
+
+**What just happened**:
+1. `waitTimeSeconds(20)` enables SQS long polling — the call returns immediately when messages arrive, or after 20 seconds if idle. No CPU or threads are consumed while waiting.
+2. `thenAccept` + `whenComplete` chain the next poll reactively. The single async I/O thread handles everything — no thread pool needed for polling.
+3. Each message body is the full EventBridge event JSON. Your business metadata is at `detail._helper_metadata`.
+4. On success, the message is deleted. On failure, it becomes visible again after the queue's visibility timeout for automatic retry.
+
+> **Tip**: For production, add a DLQ to the SQS queue (e.g., `maxReceiveCount: 3`) so poison messages don't loop forever. See [User Guide — Operational Runbook](USER_GUIDE.md#operational-runbook) for monitoring guidance.
 
 ---
 

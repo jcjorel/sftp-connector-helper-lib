@@ -204,7 +204,7 @@ When using `WHOLE_TRANSFER_COMPLETION_ONLY` or `INDIVIDUAL_AND_WHOLE_TRANSFER_CO
 | Value | Meaning |
 |-------|---------|
 | `ALL_COMPLETED` | Every file has `status-code: "COMPLETED"` |
-| `ALL_FAILED` | Every file has a non-COMPLETED status |
+| `ALL_FAILED` | Every file has status `FAILED` |
 | `PARTIAL_FAILURE` | Mix of completed and failed files |
 
 ### EventBridge Rule (CDK)
