@@ -18,7 +18,7 @@ Add the Maven dependency:
 <dependency>
     <groupId>io.github.jcjorel</groupId>
     <artifactId>sftp-connector-helper</artifactId>
-    <version>2.0.0</version>
+    <version>2.0.1</version>
 </dependency>
 ```
 
@@ -526,7 +526,7 @@ Add the SQS async dependency to your `pom.xml`:
 <dependency>
     <groupId>com.fasterxml.jackson.core</groupId>
     <artifactId>jackson-databind</artifactId>
-    <version>2.18.2</version>
+    <version>2.21.3</version>
 </dependency>
 ```
 

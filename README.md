@@ -95,13 +95,12 @@ The helper adds a single metadata write per operation (~5–10 ms typical). End-
 - **Single-file operations** add ~835–1079 ms mean overhead, largely due to the enriched event pipeline rather than the metadata write itself.
 - **Batch-completion mode** (`WholeOnly`, `Ind+Whole`) adds minimal cost over per-file mode while providing a single "all done" signal for fan-out workflows.
 
-Run the benchmark: `make test-integration AWS_PROFILE=<profile> AWS_REGION=<region>`
-
-> Integration tests require environment-specific variables (`CONNECTOR_ID`, `TEST_S3_BUCKET`, `REMOTE_DIR`) — edit the Makefile `test-integration` target for your environment.
+Run the benchmark: `make test-integration AWS_PROFILE=<profile> AWS_REGION=<region> CONNECTOR_ID=<id> TEST_S3_BUCKET=<bucket> REMOTE_DIR=<dir>`
 
 ## Project Structure
 
 ```
+├── pom.xml                # Parent POM (centralized dependency management)
 ├── helpers/java/          # Java helper library (Maven)
 ├── lambdas/
 │   ├── event-writer/      # Captures Transfer Family events into DynamoDB
@@ -122,7 +121,7 @@ Run the benchmark: `make test-integration AWS_PROFILE=<profile> AWS_REGION=<regi
 | `make destroy AWS_PROFILE=x AWS_REGION=y` | Tear down the deployed stack |
 | `make bootstrap AWS_PROFILE=x AWS_REGION=y` | One-time CDK bootstrap in target region |
 | `make test` | Run Java unit tests |
-| `make test-integration` | Run integration tests (requires deployed stack) |
+| `make test-integration CONNECTOR_ID=x TEST_S3_BUCKET=y REMOTE_DIR=z` | Run integration tests (requires deployed stack) |
 | `make clean` | Remove Java build artifacts |
 
 ## Documentation
