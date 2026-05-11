@@ -37,3 +37,6 @@ _bmad/
 
 # Maven versions plugin
 pom.xml.versionsBackup
+
+# Maven flatten plugin
+.flattened-pom.xml
