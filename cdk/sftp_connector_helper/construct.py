@@ -11,6 +11,7 @@ from aws_cdk import (
     aws_events_targets as targets,
     aws_iam as iam,
     aws_lambda as _lambda,
+    aws_lambda_event_sources as _lambda_event_sources,
     aws_logs as logs,
     aws_pipes as pipes,
     aws_sns as sns,
@@ -226,6 +227,40 @@ class SftpConnectorHelper(Construct):
             )
         )
         self._orphan_topic.grant_publish(joiner_lambda)
+
+        # Batch Timeout Queue (SQS delay hopping)
+        timeout_dlq = sqs.Queue(
+            self,
+            "TimeoutDLQ",
+            queue_name="sftp-connector-helper-timeout-dlq",
+            retention_period=cdk.Duration.hours(24),
+        )
+
+        self._timeout_queue = sqs.Queue(
+            self,
+            "TimeoutQueue",
+            queue_name="sftp-connector-helper-timeout",
+            retention_period=cdk.Duration.hours(24),
+            visibility_timeout=cdk.Duration.seconds(360),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=3,
+                queue=timeout_dlq,
+            ),
+        )
+
+        # Grant Joiner Lambda permissions to send messages (schedule + re-enqueue hops)
+        self._timeout_queue.grant_send_messages(joiner_lambda)
+
+        # Add TIMEOUT_QUEUE_URL environment variable
+        joiner_lambda.add_environment("TIMEOUT_QUEUE_URL", self._timeout_queue.queue_url)
+
+        # SQS Event Source Mapping: timeout queue → Joiner Lambda
+        joiner_lambda.add_event_source(
+            _lambda_event_sources.SqsEventSource(
+                self._timeout_queue,
+                batch_size=1,
+            )
+        )
 
         # Pipe: DynamoDB Streams → Joiner Lambda (direct invocation, batch_size=4)
         pipe_role = iam.Role(

@@ -172,11 +172,25 @@ public final class SftpConnectorHelper implements AutoCloseable {
         validateMetadata(metadata);
         StartFileTransferResponse response = transferClient.startFileTransfer(request);
 
-        EventEmissionMode mode = (options != null) ? options.emissionMode() : EventEmissionMode.INDIVIDUAL_FILE_EVENTS_ONLY;
+        FileTransferOptions effective = (options != null) ? options : FileTransferOptions.defaults();
+        EventEmissionMode mode = effective.emissionMode();
         if (mode == EventEmissionMode.INDIVIDUAL_FILE_EVENTS_ONLY) {
             return writeMetadataAndReturn(response, response.transferId(), metadata, true);
         }
-        return writeMetadataWithBatchFields(response, response.transferId(), metadata, request, mode);
+
+        // Validate batchTimeout < effective TTL
+        Duration batchTimeout = effective.batchTimeout();
+        if (!batchTimeout.isZero()) {
+            long effectiveTtlSeconds = ttlDuration.toSeconds() + 3600;
+            if (batchTimeout.toSeconds() >= effectiveTtlSeconds) {
+                throw new IllegalArgumentException(
+                        "batchTimeout (" + batchTimeout + ") must be less than effective TTL ("
+                        + Duration.ofSeconds(effectiveTtlSeconds) + " = ttlDuration + 1h master stagger). "
+                        + "Otherwise the DynamoDB record may expire before the timeout fires.");
+            }
+        }
+
+        return writeMetadataWithBatchFields(response, response.transferId(), metadata, request, mode, batchTimeout);
     }
 
     /**
@@ -275,7 +289,7 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
     private SftpOperationResult<StartFileTransferResponse> writeMetadataWithBatchFields(
             StartFileTransferResponse response, String jobId, String metadata,
-            StartFileTransferRequest request, EventEmissionMode mode) {
+            StartFileTransferRequest request, EventEmissionMode mode, Duration batchTimeout) {
         if (jobId == null || jobId.isEmpty()) {
             throw new IllegalStateException("SDK response returned null or empty job ID");
         }
@@ -283,26 +297,43 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
         boolean isSend = request.hasSendFilePaths() && !request.sendFilePaths().isEmpty();
         String transferDirection = isSend ? "SEND" : "RETRIEVE";
-        int expectedFiles = isSend ? request.sendFilePaths().size() : request.retrieveFilePaths().size();
+        java.util.List<String> filePaths = isSend ? request.sendFilePaths() : request.retrieveFilePaths();
+        int expectedFiles = filePaths.size();
+
+        // Build update expression and attribute values
+        StringBuilder updateExpr = new StringBuilder(
+                "SET metadata = :m, #t = :t, emissionMode = :em, expectedFiles = :ef, transferDirection = :td, connectorId = :cid, fileStatuses = :fs");
+        java.util.Map<String, String> exprNames = new java.util.HashMap<>();
+        exprNames.put("#t", "ttl");
+        java.util.Map<String, AttributeValue> exprValues = new java.util.HashMap<>();
+        exprValues.put(":m", AttributeValue.builder().s(metadata).build());
+        exprValues.put(":t", AttributeValue.builder().n(String.valueOf(ttlEpochSeconds)).build());
+        exprValues.put(":em", AttributeValue.builder().s(mode.name()).build());
+        exprValues.put(":ef", AttributeValue.builder().n(String.valueOf(expectedFiles)).build());
+        exprValues.put(":td", AttributeValue.builder().s(transferDirection).build());
+        exprValues.put(":cid", AttributeValue.builder().s(request.connectorId()).build());
+        exprValues.put(":fs", AttributeValue.builder().m(Map.of(
+                "_init", AttributeValue.builder().m(Map.of()).build()
+        )).build());
+
+        // Add batchTimeoutAt and filePaths when timeout is enabled
+        if (!batchTimeout.isZero()) {
+            long batchTimeoutAt = Instant.now().getEpochSecond() + batchTimeout.getSeconds();
+            updateExpr.append(", batchTimeoutAt = :bta, filePaths = :fp");
+            exprValues.put(":bta", AttributeValue.builder().n(String.valueOf(batchTimeoutAt)).build());
+            exprValues.put(":fp", AttributeValue.builder().l(
+                    filePaths.stream()
+                            .map(p -> AttributeValue.builder().s(p).build())
+                            .toList()
+            ).build());
+        }
 
         UpdateItemRequest updateRequest = UpdateItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of("jobId", AttributeValue.builder().s(jobId).build()))
-                .updateExpression("SET metadata = :m, #t = :t, emissionMode = :em, expectedFiles = :ef, transferDirection = :td, fileStatuses = :fs")
-                .expressionAttributeNames(Map.of("#t", "ttl"))
-                .expressionAttributeValues(Map.of(
-                        ":m", AttributeValue.builder().s(metadata).build(),
-                        ":t", AttributeValue.builder().n(String.valueOf(ttlEpochSeconds)).build(),
-                        ":em", AttributeValue.builder().s(mode.name()).build(),
-                        ":ef", AttributeValue.builder().n(String.valueOf(expectedFiles)).build(),
-                        ":td", AttributeValue.builder().s(transferDirection).build(),
-                        // Sentinel entry "_init" ensures the map is persisted by DynamoDB.
-                        // Java SDK v2 silently drops empty maps in UpdateItem expressions.
-                        // The joiner Lambda filters out "_init" when assembling batch events.
-                        ":fs", AttributeValue.builder().m(Map.of(
-                                "_init", AttributeValue.builder().m(Map.of()).build()
-                        )).build()
-                ))
+                .updateExpression(updateExpr.toString())
+                .expressionAttributeNames(exprNames)
+                .expressionAttributeValues(exprValues)
                 .conditionExpression("attribute_not_exists(metadata)")
                 .build();
 

@@ -21,10 +21,10 @@ check-deploy-env:
 
 # Build targets
 build-java: check-tools
-	cd helpers/java && mvn compile -q
+	mvn compile -q -pl helpers/java
 
 test-java: check-tools
-	cd helpers/java && mvn test
+	mvn test -pl helpers/java
 
 build-lambdas: check-tools
 	@set -e; for dir in lambdas/*/; do \
@@ -91,15 +91,14 @@ destroy: check-deploy-env
 test: test-java
 
 test-integration: check-deploy-env
-	cd tests/integration/java && \
-		CONNECTOR_ID=c-0123456789abcdef0 \
-		TABLE_NAME=sftp-connector-helper \
-		EVENT_BUS_NAME=sftp-connector-helper-bus \
-		TEST_S3_BUCKET=sftp-connector-helper-test-123456789012 \
-		REMOTE_DIR=REDACTED_PATH/test_sftp_connector \
-		AWS_REGION=$(AWS_REGION) \
-		AWS_PROFILE=$(AWS_PROFILE) \
-		mvn verify
+	CONNECTOR_ID=c-0123456789abcdef0 \
+	TABLE_NAME=sftp-connector-helper \
+	EVENT_BUS_NAME=sftp-connector-helper-bus \
+	TEST_S3_BUCKET=sftp-connector-helper-test-123456789012 \
+	REMOTE_DIR=REDACTED_PATH/test_sftp_connector \
+	AWS_REGION=$(AWS_REGION) \
+	AWS_PROFILE=$(AWS_PROFILE) \
+	mvn verify -pl tests/integration/java -am
 
 clean:
-	cd helpers/java && mvn clean -q
+	mvn clean -q

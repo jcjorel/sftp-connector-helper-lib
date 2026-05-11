@@ -77,8 +77,7 @@ def _check_and_publish_batch(
 ) -> None:
     """Step 4 guard: publish batch event if all files resolved and not yet published.
 
-    master_item should be the ALL_NEW response from the conditional update (or a fresh
-    get_item on the duplicate path) — it must contain fileStatuses.
+    Uses conditional write for mutual exclusion with timeout path.
     """
     mode = master_item.get("emissionMode", "INDIVIDUAL_FILE_EVENTS_ONLY")
     if mode == "INDIVIDUAL_FILE_EVENTS_ONLY":
@@ -89,6 +88,18 @@ def _check_and_publish_batch(
     if batch_published:
         return
 
+    # Mutual exclusion via conditional write — prevents race with timeout path
+    try:
+        table.update_item(
+            Key={"jobId": master_item["jobId"]},
+            UpdateExpression="SET batchEventPublished = :t",
+            ConditionExpression="attribute_not_exists(batchEventPublished) AND attribute_not_exists(batchTimeoutPublished)",
+            ExpressionAttributeValues={":t": True},
+        )
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        return  # Timeout event already fired, or duplicate
+
+    # Conditional write succeeded — safe to publish
     file_statuses = master_item.get("fileStatuses", {})
     detail, detail_type = _assemble_batch_event_detail(master_item, file_statuses)
 
@@ -98,17 +109,6 @@ def _check_and_publish_batch(
                    batch_status=detail["status-code"])
 
     publish_batch_completion_event(events_client, bus_name, detail, detail_type)
-
-    # Best-effort dedup marker
-    try:
-        table.update_item(
-            Key={"jobId": master_item["jobId"]},
-            UpdateExpression="SET batchEventPublished = :t",
-            ExpressionAttributeValues={":t": True},
-        )
-    except Exception:
-        log_structured("WARNING", "Failed to set batchEventPublished marker",
-                       transfer_id=master_item["jobId"])
 
 
 def process_file_completion(

@@ -2,6 +2,8 @@ package io.github.jcjorel.sftpconnectorhelper;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class FileTransferOptionsTest {
@@ -43,5 +45,32 @@ class FileTransferOptionsTest {
     @Test
     void enumValues_hasThreeValues() {
         assertEquals(3, EventEmissionMode.values().length);
+    }
+
+    @Test
+    void builder_batchTimeoutAtMinimum_isAccepted() {
+        FileTransferOptions options = FileTransferOptions.builder()
+                .emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY)
+                .batchTimeout(Duration.ofSeconds(2))
+                .build();
+        assertEquals(Duration.ofSeconds(2), options.batchTimeout());
+    }
+
+    @Test
+    void builder_batchTimeoutBelowMinimum_throwsIllegalArgumentException() {
+        assertThrows(IllegalArgumentException.class, () ->
+                FileTransferOptions.builder()
+                        .emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY)
+                        .batchTimeout(Duration.ofSeconds(1))
+                        .build());
+    }
+
+    @Test
+    void builder_batchTimeoutZero_disablesTimeout() {
+        FileTransferOptions options = FileTransferOptions.builder()
+                .emissionMode(EventEmissionMode.WHOLE_TRANSFER_COMPLETION_ONLY)
+                .batchTimeout(Duration.ZERO)
+                .build();
+        assertEquals(Duration.ZERO, options.batchTimeout());
     }
 }

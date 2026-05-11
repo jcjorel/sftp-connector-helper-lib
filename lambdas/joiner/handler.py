@@ -7,6 +7,7 @@ import os
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
 
+from batch_timeout import process_timeout_message, schedule_batch_timeout
 from file_transfer_mgmt import process_file_completion, should_publish_individual_event
 from log_util import log_structured
 from metadata_copy import copy_metadata_from_master, fan_out_metadata_to_per_file_records
@@ -19,10 +20,12 @@ logger.setLevel(logging.INFO)
 EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "sftp-connector-helper-bus")
 TABLE_NAME = os.environ.get("TABLE_NAME", "sftp-connector-helper")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+TIMEOUT_QUEUE_URL = os.environ.get("TIMEOUT_QUEUE_URL", "")
 
 cloudwatch = boto3.client("cloudwatch")
 events = boto3.client("events")
 sns = boto3.client("sns")
+sqs = boto3.client("sqs")
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 
@@ -103,6 +106,11 @@ def _metadata_copy_dispatch(new_image: dict, job_id: str) -> bool:
     if has_metadata and not has_event_result and not has_transfer_id:
         log_structured("INFO", "Master record detected, fanning out metadata", job_id=job_id)
         fan_out_metadata_to_per_file_records(table, job_id, new_image["metadata"], events, EVENT_BUS_NAME)
+
+        # Schedule batch timeout after fan-out
+        if TIMEOUT_QUEUE_URL and new_image.get("expectedFiles") and new_image.get("batchTimeoutAt"):
+            schedule_batch_timeout(table, sqs, TIMEOUT_QUEUE_URL, new_image)
+
         return True
 
     return False
@@ -215,11 +223,19 @@ def _process_record(stream_record: dict) -> None:
 
 
 def lambda_handler(event, context):
-    """Process DynamoDB Stream records from EventBridge Pipe direct invocation.
-
-    Pipe sends a list of stream records directly (batch_size=1 typical).
+    """Process events from two sources:
+    - EventBridge Pipe (DynamoDB Streams): delivers a list of stream records directly
+    - SQS Event Source Mapping: delivers {"Records": [{"eventSource": "aws:sqs", ...}]}
     """
-    records = event if isinstance(event, list) else [event]
-
-    for stream_record in records:
-        _process_record(stream_record)
+    if isinstance(event, list):
+        # EventBridge Pipe path (existing)
+        for stream_record in event:
+            _process_record(stream_record)
+    elif isinstance(event, dict) and "Records" in event:
+        # SQS event source mapping path
+        for record in event["Records"]:
+            body = json.loads(record["body"])
+            process_timeout_message(table, sqs, TIMEOUT_QUEUE_URL, events, EVENT_BUS_NAME, body)
+    else:
+        # Single stream record fallback
+        _process_record(event)

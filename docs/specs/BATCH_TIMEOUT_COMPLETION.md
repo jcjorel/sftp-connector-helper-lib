@@ -619,7 +619,7 @@ The timeout path's conditional write includes a `resolvedCount < :expected` guar
 
 In the reverse direction, if the timeout conditional write succeeds first (`batchTimeoutPublished=true`), the normal batch path's conditional write fails (`attribute_not_exists(batchTimeoutPublished)` is false) and skips publication.
 
-**Result:** At most one event type is published per transfer. Both paths use DynamoDB conditional writes as the serialization point — no TOCTOU race is possible.
+**Result:** At most one event type is published per transfer in the common case. Both paths use DynamoDB conditional writes as the serialization point. However, because the timeout path uses a publish-before-marker pattern (to guarantee at-least-once delivery), a narrow window exists where both a timeout event and a normal batch event may be published if the last file resolves between the timeout's `GetItem` read and its conditional write. This is bounded to at most one extra event and is covered by the at-least-once delivery contract — consumers must be idempotent on `transfer-id`.
 
 ### Scenario Matrix
 

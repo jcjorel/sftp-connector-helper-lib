@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.jcjorel</groupId>
+    <artifactId>sftp-connector-helper-parent</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>SFTP Connector Helper - Parent</name>
+    <description>Aggregator POM for the SFTP Connector Helper library and integration tests</description>
+
+    <modules>
+        <module>helpers/java</module>
+        <module>tests/integration/java</module>
+    </modules>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <aws.sdk.version>2.44.3</aws.sdk.version>
+        <junit.version>5.11.4</junit.version>
+    </properties>
+</project>

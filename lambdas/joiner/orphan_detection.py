@@ -88,6 +88,11 @@ def detect_orphan(table, old_image: dict, job_id: str, sns_client, sns_topic_arn
 
     # Branch 2: master record (metadata, no eventResult, no transferId)
     if has_metadata and not has_event_result and not has_transfer_id:
+        # Skip orphan alert if timeout event was already published
+        if old_image.get("batchTimeoutPublished"):
+            log_structured("INFO", "Skipping orphan alert — timeout event already published", job_id=job_id)
+            return
+
         response = table.query(
             IndexName="transferId-index",
             KeyConditionExpression=Key("transferId").eq(job_id),

@@ -4,9 +4,14 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.github.jcjorel</groupId>
+    <parent>
+        <groupId>io.github.jcjorel</groupId>
+        <artifactId>sftp-connector-helper-parent</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../../../pom.xml</relativePath>
+    </parent>
+
     <artifactId>sftp-connector-helper-integration-tests</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>SFTP Connector Helper - Integration Tests</name>
@@ -36,7 +41,7 @@
         <dependency>
             <groupId>io.github.jcjorel</groupId>
             <artifactId>sftp-connector-helper</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
 
         <!-- AWS SDK clients needed for test infrastructure -->
