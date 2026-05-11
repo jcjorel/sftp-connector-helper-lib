@@ -23,8 +23,8 @@ public final class FileTransferOptions {
      *
      * <p><b>Warning:</b> Values below 15 minutes are impractical for production use.
      * SFTP Connector transfers typically take several seconds per file, and the timeout
-     * mechanism has limited time granularity. This low minimum exists to support
-     * testing scenarios with short-lived transfers.</p>
+     * mechanism has limited time granularity. Values below 15 minutes are not
+     * recommended for production use.</p>
      */
     public static final Duration MIN_BATCH_TIMEOUT = Duration.ofSeconds(2);
 
@@ -108,7 +108,7 @@ public final class FileTransferOptions {
          * {@link Duration#ZERO} to disable. Values between zero and the minimum are rejected.</p>
          *
          * <p><b>Note:</b> For production use, values of 15 minutes or more are recommended.
-         * Lower values exist only for integration testing purposes.</p>
+         * Lower values are intended for testing scenarios only.</p>
          *
          * @param timeout the timeout duration
          * @return this builder

@@ -1,7 +1,7 @@
 package io.github.jcjorel.sftpconnectorhelper;
 
 /**
- * Abstract base class for all exceptions thrown by the SFTP Connector Helper library.
+ * Base exception for all failures thrown by the SFTP Connector Helper library.
  *
  * <p>Extends {@link RuntimeException} (unchecked) to maintain consistency with the
  * AWS SDK exception model where SDK failures propagate as unchecked exceptions.</p>

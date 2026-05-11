@@ -148,7 +148,7 @@ public final class SftpConnectorHelper implements AutoCloseable {
      *
      * @param request  the StartFileTransfer SDK request
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
-     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 (not array, not primitive, not {@code null}), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
      * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
@@ -170,7 +170,7 @@ public final class SftpConnectorHelper implements AutoCloseable {
      *
      * @param request  the StartFileTransfer SDK request
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
-     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 (not array, not primitive, not {@code null}), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
      * @param options  event emission options, or {@code null} for default behavior
      * @return the SDK response from the Transfer Family operation
@@ -214,7 +214,7 @@ public final class SftpConnectorHelper implements AutoCloseable {
      *
      * @param request  the StartDirectoryListing SDK request
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
-     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 (not array, not primitive, not {@code null}), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
      * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
@@ -237,7 +237,7 @@ public final class SftpConnectorHelper implements AutoCloseable {
      *
      * @param request  the StartRemoteMove SDK request
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
-     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 (not array, not primitive, not {@code null}), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
      * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
@@ -260,7 +260,7 @@ public final class SftpConnectorHelper implements AutoCloseable {
      *
      * @param request  the StartRemoteDelete SDK request
      * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
-     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 (not array, not primitive, not {@code null}), maximum 8,000 bytes UTF-8 encoded,
      *                 maximum nesting depth of 50 levels.
      * @return the SDK response from the Transfer Family operation
      * @throws IllegalArgumentException if request is null or metadata is invalid
@@ -371,7 +371,7 @@ public final class SftpConnectorHelper implements AutoCloseable {
     /**
      * Validates the metadata JSON string against size and format constraints.
      *
-     * @param metadata the metadata JSON string to validate
+     * @param metadata the metadata JSON string to validate.
      * @throws IllegalArgumentException if metadata is invalid
      */
     void validateMetadata(String metadata) {
