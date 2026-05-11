@@ -21,22 +21,28 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * Helper library for AWS Transfer Family SFTP Connector operations
- * with automatic metadata correlation via DynamoDB.
+ * Provides metadata-correlated wrappers around AWS Transfer Family SFTP Connector operations.
  *
  * <p>Wraps each Transfer Family SDK call (StartFileTransfer, StartDirectoryListing,
- * StartRemoteMove, StartRemoteDelete) to first execute the operation, then write
- * caller-supplied business metadata to DynamoDB using a conditional {@code UpdateItem}.
- * Downstream, the Joiner Lambda joins this metadata with Transfer Family events and
- * publishes enriched events to a dedicated EventBridge bus.</p>
+ * StartRemoteMove, StartRemoteDelete) to first execute the operation, then persist
+ * caller-supplied business metadata. Downstream, the framework joins this metadata
+ * with Transfer Family events and publishes enriched events to a dedicated EventBridge bus.</p>
  *
  * <p>Implements {@link AutoCloseable} — use try-with-resources or call {@link #close()}
  * to release the underlying SDK clients when done.</p>
  *
+ * <p><b>Thread Safety:</b> This class is thread-safe. It holds immutable configuration and
+ * thread-safe AWS SDK clients. Multiple threads may invoke operations concurrently.</p>
+ *
  * <h2>Usage</h2>
  * <pre>{@code
  * try (SftpConnectorHelper helper = SftpConnectorHelper.builder().build()) {
- *     var result = helper.startFileTransfer(request, "{\"orderId\":\"ORD-001\"}");
+ *     StartFileTransferRequest request = StartFileTransferRequest.builder()
+ *         .connectorId("c-1234567890abcdef0")
+ *         .sendFilePaths("/outbound/invoice.csv")
+ *         .build();
+ *     SftpOperationResult<StartFileTransferResponse> result =
+ *         helper.startFileTransfer(request, "{\"orderId\":\"ORD-001\"}");
  * }
  * }</pre>
  *
@@ -45,7 +51,13 @@ import java.util.Map;
  */
 public final class SftpConnectorHelper implements AutoCloseable {
 
+    /**
+     * Default DynamoDB table name used for metadata storage.
+     *
+     * @see SftpConnectorHelperBuilder#tableName(String)
+     */
     public static final String DEFAULT_TABLE_NAME = "sftp-connector-helper";
+    /** Default time-to-live duration (24 hours) for metadata records. */
     public static final Duration DEFAULT_TTL_DURATION = Duration.ofHours(24);
 
     private final String tableName;
@@ -69,27 +81,48 @@ public final class SftpConnectorHelper implements AutoCloseable {
         return new SftpConnectorHelperBuilder();
     }
 
-    /** Returns the DynamoDB table name used for metadata storage. */
+    /**
+     * Returns the DynamoDB table name used for metadata storage.
+     *
+     * @return the table name
+     */
     public String getTableName() {
         return tableName;
     }
 
-    /** Returns the TTL duration applied to DynamoDB records. */
+    /**
+     * Returns the TTL duration applied to metadata records.
+     *
+     * @return the TTL duration
+     */
     public Duration getTtlDuration() {
         return ttlDuration;
     }
 
-    /** Returns the DynamoDB client used by this helper. */
+    /**
+     * Returns the DynamoDB client used by this helper.
+     *
+     * @return the DynamoDB client
+     */
     public DynamoDbClient getDynamoDbClient() {
         return dynamoDbClient;
     }
 
-    /** Returns the Transfer Family client used by this helper. */
+    /**
+     * Returns the Transfer Family client used by this helper.
+     *
+     * @return the Transfer client
+     */
     public TransferClient getTransferClient() {
         return transferClient;
     }
 
-    /** Closes the underlying DynamoDB and Transfer Family SDK clients. */
+    /**
+     * Closes the underlying DynamoDB and Transfer Family SDK clients, releasing network resources.
+     *
+     * <p>After this method returns, any subsequent operation calls will fail.
+     * This method is idempotent — calling it multiple times has no additional effect.</p>
+     */
     @Override
     public void close() {
         dynamoDbClient.close();
@@ -98,12 +131,16 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
     /**
      * Starts a file transfer with metadata correlation.
-     * Uses staggered TTL (+3600s) since this creates the master fan-out record.
      *
      * @param request  the StartFileTransfer SDK request
-     * @param metadata the business metadata JSON string to correlate
+     * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
+     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 maximum nesting depth of 50 levels.
      * @return the operation result indicating success or specific failure mode
      * @throws IllegalArgumentException if request is null or metadata is invalid
+     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws software.amazon.awssdk.core.exception.SdkException
+     *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
     public SftpOperationResult<StartFileTransferResponse> startFileTransfer(StartFileTransferRequest request, String metadata) {
         return startFileTransfer(request, metadata, null);
@@ -111,17 +148,22 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
     /**
      * Starts a file transfer with metadata correlation and event emission options.
-     * Uses staggered TTL (+3600s) since this creates the master fan-out record.
      *
-     * <p>When {@code options} specifies a mode other than {@link EventEmissionMode#INDIVIDUAL_FILE_EVENTS_ONLY},
-     * batch-tracking fields ({@code emissionMode}, {@code expectedFiles}, {@code transferDirection})
-     * are written atomically with the metadata to the master DynamoDB record.</p>
+     * <p>Supports configurable event emission modes for multi-file transfers.
+     * When {@code options} specifies a batch completion mode, the framework tracks
+     * individual file completions and emits a single batch-completion event when all
+     * files have been processed.</p>
      *
      * @param request  the StartFileTransfer SDK request
-     * @param metadata the business metadata JSON string to correlate
+     * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
+     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 maximum nesting depth of 50 levels.
      * @param options  event emission options, or {@code null} for default behavior
      * @return the operation result indicating success or specific failure mode
      * @throws IllegalArgumentException if request is null or metadata is invalid
+     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws software.amazon.awssdk.core.exception.SdkException
+     *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
     public SftpOperationResult<StartFileTransferResponse> startFileTransfer(StartFileTransferRequest request, String metadata, FileTransferOptions options) {
         if (request == null) {
@@ -139,12 +181,16 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
     /**
      * Starts a directory listing with metadata correlation.
-     * Uses standard TTL (no stagger).
      *
      * @param request  the StartDirectoryListing SDK request
-     * @param metadata the business metadata JSON string to correlate
+     * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
+     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 maximum nesting depth of 50 levels.
      * @return the operation result indicating success or specific failure mode
      * @throws IllegalArgumentException if request is null or metadata is invalid
+     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws software.amazon.awssdk.core.exception.SdkException
+     *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
     public SftpOperationResult<StartDirectoryListingResponse> startDirectoryListing(StartDirectoryListingRequest request, String metadata) {
         if (request == null) {
@@ -157,12 +203,16 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
     /**
      * Starts a remote move with metadata correlation.
-     * Uses standard TTL (no stagger).
      *
      * @param request  the StartRemoteMove SDK request
-     * @param metadata the business metadata JSON string to correlate
+     * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
+     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 maximum nesting depth of 50 levels.
      * @return the operation result indicating success or specific failure mode
      * @throws IllegalArgumentException if request is null or metadata is invalid
+     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws software.amazon.awssdk.core.exception.SdkException
+     *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
     public SftpOperationResult<StartRemoteMoveResponse> startRemoteMove(StartRemoteMoveRequest request, String metadata) {
         if (request == null) {
@@ -175,12 +225,16 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
     /**
      * Starts a remote delete with metadata correlation.
-     * Uses standard TTL (no stagger).
      *
      * @param request  the StartRemoteDelete SDK request
-     * @param metadata the business metadata JSON string to correlate
+     * @param metadata the business metadata JSON string to correlate. Must be a valid JSON object
+     *                 (not array, not primitive, not null), maximum 8,000 bytes UTF-8 encoded,
+     *                 maximum nesting depth of 50 levels.
      * @return the operation result indicating success or specific failure mode
      * @throws IllegalArgumentException if request is null or metadata is invalid
+     *         (not a JSON object, exceeds 8,000 bytes, or exceeds 50 levels nesting depth)
+     * @throws software.amazon.awssdk.core.exception.SdkException
+     *         if the Transfer Family API call fails (network error, throttling, access denied)
      */
     public SftpOperationResult<StartRemoteDeleteResponse> startRemoteDelete(StartRemoteDeleteRequest request, String metadata) {
         if (request == null) {
@@ -264,7 +318,9 @@ public final class SftpConnectorHelper implements AutoCloseable {
 
     /**
      * Validates metadata before SDK calls.
-     * Package-private — called by wrapper methods in Stories 1.3/1.4.
+     *
+     * @param metadata the metadata JSON string to validate
+     * @throws IllegalArgumentException if metadata is invalid
      */
     void validateMetadata(String metadata) {
         MetadataValidator.validate(metadata);

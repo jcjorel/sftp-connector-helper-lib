@@ -27,6 +27,7 @@ public sealed interface SftpOperationResult<T> {
     /**
      * SDK call and metadata write both succeeded.
      *
+     * @param <T>      the type of the SDK response
      * @param response the SDK response from the Transfer Family operation
      */
     record Success<T>(T response) implements SftpOperationResult<T> {}
@@ -35,6 +36,7 @@ public sealed interface SftpOperationResult<T> {
      * SDK call succeeded but DynamoDB metadata write failed.
      * The transfer is in progress but metadata won't be joined to downstream events.
      *
+     * @param <T>      the type of the SDK response
      * @param response the SDK response from the Transfer Family operation
      * @param jobId    the job identifier returned by the SDK
      * @param cause    the exception that caused the write failure
@@ -45,6 +47,7 @@ public sealed interface SftpOperationResult<T> {
      * SDK call succeeded but metadata already existed for this jobId.
      * This typically indicates a caller bug (duplicate invocation) or a retry.
      *
+     * @param <T>      the type of the SDK response
      * @param response the SDK response from the Transfer Family operation
      * @param jobId    the job identifier that already had metadata
      */

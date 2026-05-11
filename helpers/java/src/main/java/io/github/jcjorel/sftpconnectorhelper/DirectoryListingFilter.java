@@ -20,6 +20,19 @@ import java.util.regex.Pattern;
  * Filters directory listing S3 output by file path and directory path regex patterns.
  * Accepts both raw EventBridge events and enriched events (with {@code _helper_metadata}).
  * This is a read-only utility — no S3 writes are performed.
+ *
+ * <p><b>Thread Safety:</b> This class is thread-safe provided the supplied
+ * {@link software.amazon.awssdk.services.s3.S3Client} is thread-safe
+ * (the default AWS SDK S3 client is thread-safe).</p>
+ *
+ * <h2>Usage</h2>
+ * <pre>{@code
+ * DirectoryListingFilter filter = new DirectoryListingFilter(s3Client);
+ * DirectoryListingResult result = filter.filter(eventJson, "\\.csv$", null);
+ * result.files().forEach(f -> System.out.println(f.get("filePath")));
+ * }</pre>
+ *
+ * @see DirectoryListingResult
  */
 public final class DirectoryListingFilter {
 
@@ -27,7 +40,10 @@ public final class DirectoryListingFilter {
     private final S3Client s3Client;
 
     /**
-     * @param s3Client S3 client used to read the directory listing output
+     * Creates a new filter instance.
+     *
+     * @param s3Client the S3 client used to read the directory listing output; must not be null
+     * @throws IllegalArgumentException if {@code s3Client} is null
      */
     public DirectoryListingFilter(S3Client s3Client) {
         if (s3Client == null) {
@@ -39,11 +55,18 @@ public final class DirectoryListingFilter {
     /**
      * Filters a directory listing result referenced by an EventBridge event.
      *
+     * <p>Reads the S3 object referenced in the event's {@code detail.output-file-location},
+     * parses the listing JSON, and applies regex filters to file and path entries.</p>
+     *
      * @param eventJson  EventBridge event JSON (raw or enriched)
      * @param fileRegex  regex for filePath filtering: null=include all, ""=exclude all, otherwise Matcher.find()
      * @param pathRegex  regex for path filtering: null=include all, ""=exclude all, otherwise Matcher.find()
      * @return filtered result preserving the original truncated flag
+     * @throws IllegalArgumentException if the event JSON does not contain
+     *         {@code detail.output-file-location} with both {@code bucket} and {@code key} fields.
      * @throws IOException if JSON parsing or S3 read fails
+     * @throws software.amazon.awssdk.core.exception.SdkException
+     *         if the S3 GetObject call fails (network error, access denied, object not found)
      */
     public DirectoryListingResult filter(String eventJson, String fileRegex, String pathRegex) throws IOException {
         JsonNode event = MAPPER.readTree(eventJson);

@@ -13,6 +13,7 @@ import java.util.Map;
  * @param files     filtered file entries (each map contains at least a {@code "filePath"} key)
  * @param paths     filtered path entries (each map contains at least a {@code "path"} key)
  * @param truncated original truncated flag from the S3 listing output ({@code "true"} or {@code "false"})
+ * @see DirectoryListingFilter
  */
 public record DirectoryListingResult(
         List<Map<String, Object>> files,

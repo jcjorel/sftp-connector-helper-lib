@@ -13,7 +13,9 @@ import java.nio.charset.StandardCharsets;
  */
 public final class MetadataValidator {
 
+    /** Maximum allowed metadata size in bytes (UTF-8 encoded). */
     private static final int MAX_METADATA_BYTES = 8_000;
+    /** Maximum allowed JSON nesting depth. */
     private static final int MAX_NESTING_DEPTH = 50;
     private static final ObjectMapper OBJECT_MAPPER = createObjectMapper();
 
@@ -28,10 +30,11 @@ public final class MetadataValidator {
     }
 
     /**
-     * Validates that metadata is a non-null JSON object within size limits.
+     * Validates that metadata is a non-null JSON object within size and nesting limits.
      *
      * @param metadata the metadata JSON string to validate
-     * @throws IllegalArgumentException if metadata is null, not a JSON object, or exceeds size limit
+     * @throws IllegalArgumentException if metadata is null, not a JSON object,
+     *         exceeds 8,000 bytes UTF-8 encoded, or exceeds 50 levels of nesting depth
      */
     public static void validate(String metadata) {
         if (metadata == null || metadata.isEmpty()) {

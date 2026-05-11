@@ -2,6 +2,9 @@ package io.github.jcjorel.sftpconnectorhelper;
 
 /**
  * Controls which events are published to EventBridge for a file transfer operation.
+ *
+ * @see FileTransferOptions
+ * @see SftpConnectorHelper#startFileTransfer(software.amazon.awssdk.services.transfer.model.StartFileTransferRequest, String, FileTransferOptions)
  */
 public enum EventEmissionMode {
     /** Publish only individual per-file enriched events (default, backward-compatible). */

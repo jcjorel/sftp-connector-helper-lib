@@ -16,6 +16,9 @@ import java.time.Duration;
  *   <li>{@code transferClient} — creates a default client using the standard credential chain</li>
  * </ul>
  *
+ * <p><b>Thread Safety:</b> This builder is not thread-safe. Create a new builder instance
+ * per thread or synchronize externally.</p>
+ *
  * <h2>Usage</h2>
  * <pre>{@code
  * SftpConnectorHelper helper = SftpConnectorHelper.builder()
@@ -23,6 +26,8 @@ import java.time.Duration;
  *     .ttlDuration(Duration.ofHours(12))
  *     .build();
  * }</pre>
+ *
+ * @see SftpConnectorHelper
  */
 public final class SftpConnectorHelperBuilder {
 
@@ -45,9 +50,10 @@ public final class SftpConnectorHelperBuilder {
     }
 
     /**
-     * Sets the TTL duration for DynamoDB records.
+     * Sets the TTL duration for metadata records.
      *
-     * @param ttlDuration the TTL duration (default: 24 hours); must be positive
+     * @param ttlDuration the TTL duration (default: 24 hours); must be positive if non-null.
+     *                    Null uses the default.
      * @return this builder
      */
     public SftpConnectorHelperBuilder ttlDuration(Duration ttlDuration) {
@@ -57,6 +63,10 @@ public final class SftpConnectorHelperBuilder {
 
     /**
      * Sets a custom DynamoDB client.
+     *
+     * <p><b>Note:</b> When a custom client is provided, {@link SftpConnectorHelper#close()}
+     * will still call {@code close()} on it. If you need the client to outlive the helper,
+     * do not pass it here.</p>
      *
      * @param dynamoDbClient the DynamoDB client to use (default: creates a new client)
      * @return this builder
@@ -68,6 +78,10 @@ public final class SftpConnectorHelperBuilder {
 
     /**
      * Sets a custom Transfer Family client.
+     *
+     * <p><b>Note:</b> When a custom client is provided, {@link SftpConnectorHelper#close()}
+     * will still call {@code close()} on it. If you need the client to outlive the helper,
+     * do not pass it here.</p>
      *
      * @param transferClient the Transfer client to use (default: creates a new client)
      * @return this builder
