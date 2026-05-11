@@ -33,6 +33,7 @@ Introduce a **timeout-based batch completion event** that fires when a configura
 4. **Mutual exclusion** — Normal batch event and timeout event are mutually exclusive; whichever fires first suppresses the other
 5. **At-least-once delivery** — Timeout events may duplicate but never be lost; consumers must be idempotent
 6. **Shared Lambda** — Timeout checking runs in the Joiner Lambda (SQS event source mapping added alongside existing DynamoDB Streams source)
+7. **Orphan detection as backstop** — If the DynamoDB Stream event for the master INSERT is lost or DLQ'd by the Pipe, the timeout is never scheduled. Orphan detection at TTL expiry (25h) remains the ultimate safety net. This is an accepted failure mode — the timeout mechanism is best-effort acceleration, not a replacement for orphan detection.
 
 ---
 
@@ -221,6 +222,18 @@ if (emissionMode != EventEmissionMode.INDIVIDUAL_FILE_EVENTS_ONLY) {
             "batchTimeout must be >= 15 minutes or Duration.ZERO (disabled), got: " + batchTimeout);
     }
 }
+
+// In SftpConnectorHelper.startFileTransfer(), after resolving effective options:
+// Validate batchTimeout < effective TTL (ttlDuration + 1h master stagger)
+if (!effectiveBatchTimeout.isZero()) {
+    long effectiveTtlSeconds = ttlDuration.toSeconds() + 3600; // master record stagger
+    if (effectiveBatchTimeout.toSeconds() >= effectiveTtlSeconds) {
+        throw new IllegalArgumentException(
+            "batchTimeout (" + effectiveBatchTimeout + ") must be less than effective TTL ("
+            + Duration.ofSeconds(effectiveTtlSeconds) + " = ttlDuration + 1h master stagger). "
+            + "Otherwise the DynamoDB record may expire before the timeout fires.");
+    }
+}
 ```
 
 ### Effective Behavior Matrix
@@ -288,12 +301,13 @@ When `batchTimeout` is `Duration.ZERO`, `batchTimeoutAt` and `filePaths` are **o
 
 | When | Operation | Details |
 |------|-----------|---------|
-| Joiner schedules timeout | `UpdateItem(PK=transferId)` conditional | Sets `batchTimeoutScheduled=true`; silent on `ConditionalCheckFailedException` |
+| Joiner schedules timeout (pre-check) | `GetItem(PK=transferId)` projected | Checks `batchTimeoutScheduled`; skips if already set |
+| Joiner schedules timeout (dedup marker) | `UpdateItem(PK=transferId)` conditional | Sets `batchTimeoutScheduled=true` after SQS send; silent on `ConditionalCheckFailedException` |
 | Each hop (up to 3 intermediate) | None | Pure SQS re-enqueue from message body |
 | Fire time — guard check | `GetItem(PK=transferId)` | Projected: `resolvedCount`, `batchEventPublished`, `batchTimeoutPublished`, `fileStatuses` |
 | Fire time — dedup marker | `UpdateItem(PK=transferId)` conditional | Sets `batchTimeoutPublished=true`; `attribute_not_exists(batchTimeoutPublished)` |
 
-**Total DDB cost per timeout event: 1 RCU + 2 WCU** (1 WCU for schedule dedup at T+0, 1 RCU + 1 WCU at fire time).
+**Total DDB cost per timeout event: 2 RCU + 2 WCU** (1 RCU pre-check + 1 WCU dedup marker at T+0, 1 RCU + 1 WCU at fire time).
 
 **During hops: zero DDB cost.**
 
@@ -310,48 +324,88 @@ The Joiner Lambda receives events from two sources:
 Dispatch by event shape:
 
 ```python
-def lambda_handler(event, context):
-    records = event if isinstance(event, list) else event.get("Records", [event])
+from batch_timeout import process_timeout_message
 
-    for record in records:
-        if "eventSource" in record and record["eventSource"] == "aws:sqs":
+def lambda_handler(event, context):
+    """Process events from two sources:
+    - EventBridge Pipe (DynamoDB Streams): delivers a list of stream records directly
+    - SQS Event Source Mapping: delivers {"Records": [{"eventSource": "aws:sqs", ...}]}
+    """
+    if isinstance(event, list):
+        # EventBridge Pipe path (existing) — batch_size=1 typical
+        for stream_record in event:
+            _process_record(stream_record)
+    elif "Records" in event:
+        # SQS event source mapping path (new)
+        for record in event["Records"]:
             body = json.loads(record["body"])
-            _process_timeout_message(body)
-        else:
-            _process_record(record)  # existing DynamoDB stream path
+            process_timeout_message(table, sqs, TIMEOUT_QUEUE_URL, events, EVENT_BUS_NAME, body)
+    else:
+        # Single stream record fallback
+        _process_record(event)
 ```
 
 ### New: Schedule Timeout (Master INSERT Path)
 
-Triggered in the existing master record detection branch (`has metadata, no eventResult, no transferId`), after `fan_out_metadata_to_per_file_records(...)`:
+Triggered inside `_metadata_copy_dispatch()` in `handler.py`, in the master record detection branch (`has metadata, no eventResult, no transferId`), immediately after `fan_out_metadata_to_per_file_records(...)` returns:
 
 ```python
-# In handler.py, master record INSERT path:
-if new_image.get("expectedFiles") and new_image.get("batchTimeoutAt"):
-    _schedule_batch_timeout(new_image)
+# In handler.py — modified _metadata_copy_dispatch(), master record branch:
+from batch_timeout import schedule_batch_timeout
+
+def _metadata_copy_dispatch(new_image: dict, job_id: str) -> bool:
+    ...
+    # Master detection: has metadata, no eventResult, no transferId
+    if has_metadata and not has_event_result and not has_transfer_id:
+        log_structured("INFO", "Master record detected, fanning out metadata", job_id=job_id)
+        fan_out_metadata_to_per_file_records(table, job_id, new_image["metadata"], events, EVENT_BUS_NAME)
+
+        # Schedule batch timeout after fan-out (new)
+        if new_image.get("expectedFiles") and new_image.get("batchTimeoutAt"):
+            schedule_batch_timeout(table, sqs, TIMEOUT_QUEUE_URL, new_image)
+
+        return True
+    ...
+```
+
+The timeout logic lives in a dedicated `batch_timeout.py` module:
+
+```python
+# batch_timeout.py — Batch timeout scheduling, hop/fire processing, and event assembly.
+
+import json
+import time
+
+from log_util import log_structured
+from publish import publish_batch_completion_event
 
 
-def _schedule_batch_timeout(master_image: dict) -> None:
-    """Send delayed SQS message to trigger timeout check. Idempotent via conditional write."""
+def schedule_batch_timeout(table, sqs_client, queue_url: str, master_image: dict) -> None:
+    """Send delayed SQS message to trigger timeout check. Idempotent via conditional write.
+
+    Ordering: SQS send BEFORE dedup marker write. This ensures that if the Lambda crashes
+    after the dedup marker but before the SQS send, the schedule can be retried on stream
+    replay. Duplicate SQS messages are harmless — the fire logic is fully idempotent
+    (conditional write on batchTimeoutPublished + resolvedCount guard).
+    """
     job_id = master_image["jobId"]
 
-    # Dedup: prevent duplicate SQS sends on stream replay
-    try:
-        table.update_item(
-            Key={"jobId": job_id},
-            UpdateExpression="SET batchTimeoutScheduled = :t",
-            ConditionExpression="attribute_not_exists(batchTimeoutScheduled)",
-            ExpressionAttributeValues={":t": True}
-        )
-    except table.meta.client.exceptions.ConditionalCheckFailedException:
+    # Pre-check: skip if already scheduled (avoids unnecessary SQS sends on replay)
+    resp = table.get_item(
+        Key={"jobId": job_id},
+        ProjectionExpression="batchTimeoutScheduled",
+        ConsistentRead=True
+    )
+    if resp.get("Item", {}).get("batchTimeoutScheduled"):
         return  # Silent — already scheduled
 
     target_time = int(master_image["batchTimeoutAt"])
     remaining = max(target_time - int(time.time()), 1)
     delay = min(remaining, 900)
 
-    sqs.send_message(
-        QueueUrl=TIMEOUT_QUEUE_URL,
+    # Send SQS message FIRST — duplicates are harmless
+    sqs_client.send_message(
+        QueueUrl=queue_url,
         MessageBody=json.dumps({
             "transferId": job_id,
             "targetTimeoutAt": target_time,
@@ -363,12 +417,25 @@ def _schedule_batch_timeout(master_image: dict) -> None:
         }),
         DelaySeconds=delay
     )
+
+    # Dedup marker AFTER successful SQS send — prevents redundant sends on future replays
+    try:
+        table.update_item(
+            Key={"jobId": job_id},
+            UpdateExpression="SET batchTimeoutScheduled = :t",
+            ConditionExpression="attribute_not_exists(batchTimeoutScheduled)",
+            ExpressionAttributeValues={":t": True}
+        )
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        pass  # Silent — concurrent schedule won; our SQS message is a harmless duplicate
 ```
 
 ### New: Timeout Message Processing (SQS Path)
 
 ```python
-def _process_timeout_message(body: dict) -> None:
+# batch_timeout.py (continued)
+
+def process_timeout_message(table, sqs_client, queue_url: str, events_client, bus_name: str, body: dict) -> None:
     """Process a timeout message: hop or fire."""
     transfer_id = body["transferId"]
     target_time = body["targetTimeoutAt"]
@@ -377,8 +444,8 @@ def _process_timeout_message(body: dict) -> None:
     # Hop: not yet time
     if now < target_time:
         remaining = min(target_time - now, 900)
-        sqs.send_message(
-            QueueUrl=TIMEOUT_QUEUE_URL,
+        sqs_client.send_message(
+            QueueUrl=queue_url,
             MessageBody=json.dumps(body),
             DelaySeconds=remaining
         )
@@ -392,7 +459,14 @@ def _process_timeout_message(body: dict) -> None:
     )
     item = resp.get("Item")
     if not item:
-        return  # Record TTL'd — nothing to do
+        # Record TTL'd before timeout fired — publish degraded event from SQS message body.
+        # All immutable data (transferId, connectorId, metadata, filePaths) is in the message.
+        # All files are reported as TIMED_OUT since we have no fileStatuses.
+        detail, detail_type = _assemble_timeout_event(body, {"fileStatuses": {}})
+        publish_batch_completion_event(events_client, bus_name, detail, detail_type)
+        log_structured("WARN", "Published degraded batch timeout event (record TTL'd before fire)",
+                       transfer_id=transfer_id, expected_files=body["expectedFiles"])
+        return
 
     # Guard: already handled?
     if item.get("batchEventPublished") or item.get("batchTimeoutPublished"):
@@ -404,7 +478,17 @@ def _process_timeout_message(body: dict) -> None:
     if resolved >= expected:
         return  # Normal batch event will/did fire
 
-    # Dedup marker — conditional write (also guards against last-file race)
+    # Publish-before-marker pattern: publish the event FIRST, then write the dedup marker.
+    # This ensures that if Lambda crashes after publishing but before the marker write,
+    # the event is delivered (at-least-once) rather than lost. On retry, the conditional
+    # write may succeed again and produce a duplicate event — acceptable given the
+    # at-least-once delivery contract and consumer idempotency requirement.
+
+    # Assemble and publish timeout event FIRST
+    detail, detail_type = _assemble_timeout_event(body, item)
+    publish_batch_completion_event(events_client, bus_name, detail, detail_type)
+
+    # Dedup marker AFTER publish — conditional write (guards against concurrent fire)
     try:
         table.update_item(
             Key={"jobId": transfer_id},
@@ -413,11 +497,7 @@ def _process_timeout_message(body: dict) -> None:
             ExpressionAttributeValues={":t": True, ":expected": expected}
         )
     except table.meta.client.exceptions.ConditionalCheckFailedException:
-        return  # Either already published, or all files resolved concurrently
-
-    # Assemble and publish timeout event
-    detail, detail_type = _assemble_timeout_event(body, item)
-    publish_batch_completion_event(events, EVENT_BUS_NAME, detail, detail_type)
+        pass  # Marker write failed — event already published (at-least-once is acceptable)
 
     log_structured("INFO", "Published batch timeout event",
                    transfer_id=transfer_id,
@@ -429,6 +509,8 @@ def _process_timeout_message(body: dict) -> None:
 ### New: Timeout Event Assembly
 
 ```python
+# batch_timeout.py (continued)
+
 def _assemble_timeout_event(msg: dict, item: dict) -> tuple[dict, str]:
     """Assemble timeout event detail from SQS message + DDB guard read."""
     metadata = json.loads(msg["metadata"])
@@ -491,9 +573,9 @@ Normal batch completion and timeout events are mutually exclusive. Whichever fir
 
 | Location | Check | Action on conflict |
 |----------|-------|-------------------|
-| `_check_and_publish_batch` (normal batch path) | `master_item.get("batchTimeoutPublished")` | Skip normal batch event publication |
+| `_check_and_publish_batch` (normal batch path) | Conditional write: `attribute_not_exists(batchEventPublished) AND attribute_not_exists(batchTimeoutPublished)` | `ConditionalCheckFailedException` → skip publication |
 | `_process_timeout_message` (timeout path) | `item.get("batchEventPublished")` | Skip timeout event publication |
-| `_process_timeout_message` (timeout conditional write) | `resolvedCount < :expected` | Reject write if all files resolved concurrently |
+| `_process_timeout_message` (timeout conditional write) | `attribute_not_exists(batchTimeoutPublished) AND resolvedCount < :expected` | Reject write if already published or all files resolved concurrently |
 
 **`_check_and_publish_batch` modification:**
 
@@ -505,15 +587,27 @@ def _check_and_publish_batch(...) -> None:
         return
     if batch_published:
         return
-    if master_item.get("batchTimeoutPublished"):
-        return  # Timeout event already fired — mutual exclusion
+
+    # Mutual exclusion via conditional write — prevents race with timeout path.
+    # This replaces the previous unconditional best-effort marker.
+    try:
+        table.update_item(
+            Key={"jobId": transfer_id},
+            UpdateExpression="SET batchEventPublished = :t",
+            ConditionExpression="attribute_not_exists(batchEventPublished) AND attribute_not_exists(batchTimeoutPublished)",
+            ExpressionAttributeValues={":t": True}
+        )
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        return  # Timeout event already fired, or duplicate — mutual exclusion
+
+    # Conditional write succeeded — safe to publish
     ...
 ```
 
 ### Race Condition Handling
 
 Both paths use conditional writes as dedup markers:
-- Normal batch: sets `batchEventPublished = true` (unconditional, best-effort) — but only after checking `batchTimeoutPublished` in-memory
+- Normal batch: sets `batchEventPublished = true` (conditional: `attribute_not_exists(batchEventPublished) AND attribute_not_exists(batchTimeoutPublished)`)
 - Timeout: sets `batchTimeoutPublished = true` (conditional: `attribute_not_exists(batchTimeoutPublished) AND resolvedCount < :expected`)
 
 The timeout path's conditional write includes a `resolvedCount < :expected` guard. This closes the race where the last file resolves between the timeout checker's `GetItem` read and its conditional write:
@@ -523,9 +617,9 @@ The timeout path's conditional write includes a `resolvedCount < :expected` guar
 3. Timeout checker's conditional write fails (`resolvedCount < 10` is now false) → skips timeout event
 4. Normal batch path fires normally
 
-In the reverse direction, if the timeout conditional write succeeds first, the normal batch path reads `batchTimeoutPublished=true` from the master record and skips publication.
+In the reverse direction, if the timeout conditional write succeeds first (`batchTimeoutPublished=true`), the normal batch path's conditional write fails (`attribute_not_exists(batchTimeoutPublished)` is false) and skips publication.
 
-**Result:** At most one event type is published per transfer.
+**Result:** At most one event type is published per transfer. Both paths use DynamoDB conditional writes as the serialization point — no TOCTOU race is possible.
 
 ### Scenario Matrix
 
@@ -597,18 +691,21 @@ The timeout infrastructure is always deployed. Per-transfer opt-out is via `batc
 
 | Component | Write Type | Condition | Behavior on Conflict |
 |-----------|-----------|-----------|---------------------|
-| Joiner (schedule SQS) | `UpdateItem` | `attribute_not_exists(batchTimeoutScheduled)` | Silent skip — already scheduled |
+| Joiner (schedule SQS) | `GetItem` pre-check + `UpdateItem` after send | `attribute_not_exists(batchTimeoutScheduled)` | Pre-check skips early; conditional write after SQS is best-effort dedup (duplicates harmless) |
 | Joiner (timeout dedup) | `UpdateItem` | `attribute_not_exists(batchTimeoutPublished) AND resolvedCount < :expected` | Skip publication — already published or all files resolved concurrently |
-| Joiner (normal batch dedup) | `UpdateItem` | Unconditional | Best-effort marker (existing) |
+| Joiner (normal batch dedup) | `UpdateItem` | `attribute_not_exists(batchEventPublished) AND attribute_not_exists(batchTimeoutPublished)` | Skip publication — already published or timeout won the race |
 | SQS at-least-once delivery | Re-delivery | Timeout Checker is idempotent | Duplicate hops are harmless; duplicate fire attempts blocked by conditional write |
 
 ### Failure Modes
 
 | Failure | Impact | Recovery |
 |---------|--------|----------|
-| Joiner crashes after `batchTimeoutScheduled` write, before SQS send | No SQS message sent; timeout never fires | Orphan detection at TTL expiry (25h) acts as backstop |
-| SQS message lost (extremely rare) | Timeout never fires | Same backstop: orphan detection |
-| Timeout Checker crashes after publishing, before `batchTimeoutPublished` write | Duplicate timeout event on retry | Consumer idempotency handles this |
+| Joiner crashes after SQS send, before `batchTimeoutScheduled` write | Duplicate SQS message on stream replay | Harmless — fire logic is idempotent (in-memory guards + conditional write) |
+| Joiner crashes before SQS send (pre-check passed) | No SQS message sent | Stream replay retries; pre-check re-reads DDB and proceeds |
+| SQS message lost (extremely rare) | Timeout never fires | Orphan detection at TTL expiry (25h) acts as backstop |
+| DynamoDB Stream event lost/DLQ'd by Pipe | `schedule_batch_timeout()` never called; no SQS message sent | Orphan detection at TTL expiry (25h) acts as backstop. Observable via Pipe IteratorAge alarm and Pipe DLQ depth. |
+| Timeout Checker crashes after publishing, before `batchTimeoutPublished` write | Duplicate timeout event on SQS retry | Consumer idempotency handles this (at-least-once delivery contract) |
+| Timeout Checker crashes before publishing (guards passed) | No event published, no marker written | SQS redelivers message; guards re-evaluated; event published on retry |
 | DDB throttling on `GetItem` at fire time | Lambda retry (SQS visibility timeout) | Message redelivered; re-evaluates guards |
 
 ---
@@ -637,7 +734,7 @@ The `batchTimeoutScheduled` write does not add `fileStatuses` to the record (it'
 | SQS messages | ~4 sends × $0.0000004 = $0.0000016 | $0 |
 | Lambda invocations (hops) | ~3 × 128MB × 100ms ≈ negligible | $0 |
 | Lambda invocation (fire) | 1 × 128MB × 200ms ≈ negligible | $0 |
-| DDB (schedule) | 1 WCU | $0 |
+| DDB (schedule pre-check + dedup) | 1 RCU + 1 WCU | $0 |
 | DDB (fire) | 1 RCU + 1 WCU | $0 |
 | SQS queue (idle) | $0 | $0 |
 
@@ -689,8 +786,8 @@ def lambda_handler(event, context):
 |-----------|--------|-----------|
 | Java helper (`FileTransferOptions`) | Add `batchTimeout` field with validation | Low |
 | Java helper (master record write) | Add `batchTimeoutAt` + `filePaths` to `UpdateExpression` | Low |
-| Joiner Lambda (`handler.py`) | Add SQS dispatch in `lambda_handler`; add `_schedule_batch_timeout` in master INSERT path | Low |
-| Joiner Lambda (new module or extension of `file_transfer_mgmt.py`) | `_process_timeout_message`, `_assemble_timeout_event` | Medium |
+| Joiner Lambda (`handler.py`) | Add SQS dispatch in `lambda_handler`; call `schedule_batch_timeout` from `_metadata_copy_dispatch` after fan-out | Low |
+| Joiner Lambda (`batch_timeout.py`) | **New module** — `schedule_batch_timeout`, `process_timeout_message` (hop/fire), `_assemble_timeout_event` | Medium |
 | Joiner Lambda (`file_transfer_mgmt.py`) | Add `batchTimeoutPublished` guard in `_check_and_publish_batch` | Low |
 | Joiner Lambda (`orphan_detection.py`) | Add `batchTimeoutPublished` guard to skip alert | Low |
 | CDK construct | Add SQS queue + DLQ + event source mapping + IAM + env var | Low |
@@ -700,8 +797,9 @@ def lambda_handler(event, context):
 
 | File | Change |
 |------|--------|
-| `handler.py` | **Modified** — SQS/DDB stream dispatch; `_schedule_batch_timeout` call in master path |
-| `file_transfer_mgmt.py` | **Modified** — `_process_timeout_message`, `_assemble_timeout_event`; `batchTimeoutPublished` guard in `_check_and_publish_batch` |
+| `handler.py` | **Modified** — SQS/DDB stream dispatch; calls `schedule_batch_timeout` from `_metadata_copy_dispatch` after fan-out |
+| `batch_timeout.py` | **New** — `schedule_batch_timeout`, `process_timeout_message`, `_assemble_timeout_event` |
+| `file_transfer_mgmt.py` | **Modified** — `batchTimeoutPublished` guard in `_check_and_publish_batch` |
 | `orphan_detection.py` | **Modified** — `batchTimeoutPublished` guard |
 | `publish.py` | Unchanged (reuses existing `publish_batch_completion_event`) |
 
