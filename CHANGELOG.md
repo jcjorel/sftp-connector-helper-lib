@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.1] - 2026-05-12
+
+### Changed
+
+- **Centralized Maven configuration** — moved shared plugin and dependency settings into parent POM for consistency across modules
+- **Parameterized integration test target** — Makefile `test-integration` now accepts configurable parameters
+
+### Fixed
+
+- **Lambda build tooling** — replaced `uv` with plain `pip` for more reliable Lambda packaging
+
+### Chores
+
+- Upgraded Java dependencies to latest stable versions
+- Centralized dependency version management
+
 ## [2.0.0] - 2026-05-11
 
 ### Breaking Changes
