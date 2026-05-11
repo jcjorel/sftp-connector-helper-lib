@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jcjorel.sftpconnectorhelper.SftpConnectorHelper;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.TestInfo;
@@ -40,7 +39,7 @@ import static org.awaitility.Awaitility.await;
 /**
  * Base class for integration tests. Manages:
  * - SftpConnectorHelper instance
- * - Temporary SQS queue + EventBridge rule for capturing enriched events
+ * - Temporary SQS queue + EventBridge rule for capturing enriched events (created once per JVM)
  * - DynamoDB cleanup tracking
  * - Event polling utilities
  * - Orphaned test resource cleanup (prefix-based)
@@ -90,6 +89,9 @@ public abstract class IntegrationTestBase {
     /** Queue URLs already deleted in this JVM session (SQS has 60s propagation delay). */
     private static final Set<String> deletedQueueUrls = ConcurrentHashMap.newKeySet();
 
+    /** Guards one-time global infrastructure initialization. */
+    private static volatile boolean globalInfraReady = false;
+
     @BeforeEach
     void logTestEntry(TestInfo testInfo) {
         LOG.info(">>> Entering test: {}", testInfo.getDisplayName());
@@ -112,7 +114,16 @@ public abstract class IntegrationTestBase {
 
     @BeforeAll
     static void setupInfrastructure() {
-        LOG.info("Setting up test infrastructure: region={}, connector={}, table={}, bus={}",
+        if (globalInfraReady) return;
+        synchronized (IntegrationTestBase.class) {
+            if (globalInfraReady) return;
+            initGlobalInfrastructure();
+            globalInfraReady = true;
+        }
+    }
+
+    private static void initGlobalInfrastructure() {
+        LOG.info("Setting up test infrastructure (once per JVM): region={}, connector={}, table={}, bus={}",
                 REGION, CONNECTOR_ID, TABLE_NAME, EVENT_BUS_NAME);
 
         dynamoDb = DynamoDbClient.builder().region(REGION).build();
@@ -259,14 +270,16 @@ public abstract class IntegrationTestBase {
         });
 
         LOG.info("Test infrastructure ready. Rule ARN: {}", ruleArn);
+
+        // Register shutdown hook for teardown (runs once when JVM exits)
+        Runtime.getRuntime().addShutdownHook(new Thread(IntegrationTestBase::globalTeardown, "integ-test-teardown"));
     }
 
     @AfterAll
-    static void teardownInfrastructure() {
+    static void perClassCleanup() {
+        // Only clean DynamoDB records from passing tests in this class
         int skipped = 0;
         int deleted = 0;
-
-        // Cleanup DynamoDB records — skip those from failed tests
         for (String jobId : jobIdsToCleanup) {
             if (failedTestJobIds.contains(jobId)) {
                 skipped++;
@@ -280,8 +293,12 @@ public abstract class IntegrationTestBase {
                 deleted++;
             } catch (Exception ignored) {}
         }
-        LOG.info("Tearing down test infrastructure. Deleted {} DynamoDB records, preserved {} from failed tests",
-                deleted, skipped);
+        jobIdsToCleanup.clear();
+        LOG.info("Per-class cleanup: deleted {} DynamoDB records, preserved {} from failed tests", deleted, skipped);
+    }
+
+    private static void globalTeardown() {
+        LOG.info("Global teardown: cleaning up test infrastructure");
 
         // Clean up all test resources (current session + any stragglers)
         cleanupOrphanedTestResources();
@@ -292,7 +309,7 @@ public abstract class IntegrationTestBase {
         if (sqsClient != null) sqsClient.close();
         if (ebClient != null) ebClient.close();
         if (dynamoDb != null) dynamoDb.close();
-        LOG.info("Teardown complete");
+        LOG.info("Global teardown complete");
     }
 
     /**

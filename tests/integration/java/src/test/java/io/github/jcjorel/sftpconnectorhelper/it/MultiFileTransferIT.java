@@ -10,6 +10,7 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.transfer.model.StartFileTransferRequest;
+import software.amazon.awssdk.services.transfer.model.StartFileTransferResponse;
 
 import java.time.Duration;
 import java.util.ArrayList;
