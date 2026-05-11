@@ -122,7 +122,7 @@ See [Getting Started](GETTING_STARTED.md) for a hands-on deployment walkthrough.
 
 | Component | Write Type | Condition | Behavior on Conflict |
 |-----------|-----------|-----------|---------------------|
-| Java Helper (metadata) | `UpdateItem` | `attribute_not_exists(metadata)` | Returns `MetadataAlreadyExists` — SDK call already succeeded |
+| Java Helper (metadata) | `UpdateItem` | `attribute_not_exists(metadata)` | Throws `MetadataWriteException` — SDK call already succeeded; metadata was previously written |
 | Event Writer (eventResult) | `UpdateItem` | Unconditional | Last-write-wins (events are immutable per jobId) |
 | Joiner (metadata copy) | `UpdateItem` | Unconditional DynamoDB write (no condition expression), but application-level loop prevention skips records where OldImage already has metadata | Last-write-wins (idempotent — source metadata is immutable per master record) |
 | Joiner (publish) | Completeness check | `OldImage` didn't have both fields | Skips already-published records (loop prevention) |

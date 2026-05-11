@@ -407,13 +407,13 @@ Consumer Lambdas should only have:
 3. Check Joiner logs — was the enriched event published?
 4. Check your consumer rule — does the event pattern match?
 
-### "MetadataAlreadyExists returned"
+### "Unexpected duplicate metadata" MetadataWriteException
 
-Your application called the helper twice with the same operation. The first call already wrote metadata. The second SDK call started a *new* transfer that won't have metadata correlation. The `response` field in `MetadataAlreadyExists` contains the response from the new (second) SDK call — you can still extract the transfer ID from it. Fix: don't retry the helper method; retry at a higher level.
+Your application called the helper twice with the same operation. The first call already wrote metadata. The second SDK call started a *new* transfer that won't have metadata correlation. Use `e.getSdkResponse()` to extract the transfer ID from the second call. Fix: don't retry the helper method; retry at a higher level.
 
-### "MetadataWriteFailed returned"
+### MetadataWriteException thrown (DynamoDB write failure)
 
-DynamoDB write failed after the SDK call succeeded. The transfer is running but won't produce an enriched event. Common causes:
+DynamoDB write failed after the SDK call succeeded. The transfer is running but won't produce an enriched event. Use `e.getJobId()` and `e.getSdkResponse()` for recovery. Common causes:
 - DynamoDB throttling (unlikely with on-demand)
 - IAM permission missing on caller role
 - Network timeout
