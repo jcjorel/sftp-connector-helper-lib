@@ -78,13 +78,17 @@ git diff --stat $(git log -1 --format=%H --before="{SINCE_DATE}")..HEAD -- . ':!
 
 6. For each doc file, record its `{LAST_MODIFIED}` date from step 1.
 
+7. Read `CHANGELOG.md` in full. Extract:
+   - `{LATEST_VERSION}` — the version string from the most recent release heading.
+   - `{LATEST_CHANGELOG}` — the full content of the most recent version section (everything between the first and second version headings).
+
 - If step 3 returns no commits, SHOULD inform the user that documentation is up-to-date with the codebase and ask whether to proceed with a full review anyway.
 
 ### Subagent Stages
 
 MUST spawn parallel subagents using the `subagent` tool with mode `blocking`. MUST NOT review files sequentially in the main agent context.
 
-MUST use five parallel stages (one per documentation file + link validation) with no dependencies between them.
+MUST use six parallel stages (one per documentation file + link validation + changelog impact) with no dependencies between them.
 
 | Stage name | File | Role (from ownership table) |
 |------------|------|----------------------------|
@@ -92,16 +96,19 @@ MUST use five parallel stages (one per documentation file + link validation) wit
 | getting-started-review | docs/GETTING_STARTED.md | Learn by Doing |
 | architecture-review | docs/ARCHITECTURE.md | How It Works Inside |
 | user-guide-review | docs/USER_GUIDE.md | How to Use It Day-to-Day |
+| changelog-impact-review | CHANGELOG.md | Identify documentation impact from latest release |
 
 ### Per-File Review Prompt
 
-Each subagent MUST receive this prompt (substitute `{FILE}`, `{ROLE}`, `{MUST_CONTAIN}`, `{MUST_NOT_CONTAIN}` from the File Ownership Zones table, and `{LAST_MODIFIED}`, `{RECENT_CHANGES}` from the Change Discovery pre-step):
+Each subagent MUST receive this prompt (substitute `{FILE}`, `{ROLE}`, `{MUST_CONTAIN}`, `{MUST_NOT_CONTAIN}` from the File Ownership Zones table, `{LAST_MODIFIED}`, `{RECENT_CHANGES}` from the Change Discovery pre-step, and `{LATEST_VERSION}` from step 7):
 
 ```
 Read {FILE} in full. Evaluate against these criteria:
 
 CONTEXT — Codebase changes since {FILE} was last updated ({LAST_MODIFIED}):
 {RECENT_CHANGES}
+
+LIBRARY VERSION — The latest released version is {LATEST_VERSION}. Any Maven coordinates, dependency snippets, or version references in this file MUST use this version.
 
 1. OWNERSHIP VIOLATIONS: List any content that belongs in a different file per these rules:
    - {FILE} role: {ROLE}
@@ -122,6 +129,32 @@ CONTEXT — Codebase changes since {FILE} was last updated ({LAST_MODIFIED}):
 5. STALENESS: Based on the recent changes above, flag documentation sections that are likely outdated or missing coverage for new/modified features. For each finding, cite the relevant commit(s).
 
 Output a structured report with sections: VIOLATIONS, CROSS-REFS, QUALITY, DUPLICATION_CANDIDATES, STALENESS.
+```
+
+### Changelog Impact Review Prompt
+
+The `changelog-impact-review` subagent MUST receive this prompt (substitute `{LATEST_VERSION}` and `{LATEST_CHANGELOG}` from the Change Discovery pre-step):
+
+```
+Read CHANGELOG.md in full. Focus on the latest version ({LATEST_VERSION}):
+
+{LATEST_CHANGELOG}
+
+For each change entry in this version, determine:
+
+1. DOCUMENTATION IMPACT: Which documentation file(s) should be updated to reflect this change? Map each entry to the File Ownership Zones:
+   - README.md: feature list, quick start, performance table, build commands
+   - docs/GETTING_STARTED.md: tutorial scenarios, code examples
+   - docs/ARCHITECTURE.md: system design, CDK construct props, schemas
+   - docs/USER_GUIDE.md: API reference, event format, operational runbook
+
+2. VERSION REFERENCES: The current library version is {LATEST_VERSION}. Flag any documentation that should display or reference this version (Maven coordinates, dependency snippets, badge URLs).
+
+3. NEW FEATURES NEEDING DOCS: List any new features or breaking changes that require new documentation sections not yet covered.
+
+4. DEPRECATIONS / REMOVALS: List any deprecated or removed functionality that should be removed from or flagged in documentation.
+
+Output a structured report with sections: DOCUMENTATION_IMPACT, VERSION_REFERENCES, NEW_FEATURES_NEEDING_DOCS, DEPRECATIONS.
 ```
 
 ### Verification
