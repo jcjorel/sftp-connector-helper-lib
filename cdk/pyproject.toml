@@ -9,11 +9,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
+    "pytest>=9.0,<10",
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.29.0,<2"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
